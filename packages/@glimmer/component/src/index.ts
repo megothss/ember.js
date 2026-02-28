@@ -406,3 +406,5 @@ export default class Component<S = unknown> extends _GlimmerComponent<S> {
 setComponentManager((owner: Owner) => {
   return new GlimmerComponentManager(owner);
 }, Component);
+
+export { ErrorBoundary } from '@ember/component';

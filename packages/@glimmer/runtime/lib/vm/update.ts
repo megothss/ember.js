@@ -22,6 +22,7 @@ import { updateRef, valueForRef } from '@glimmer/reference';
 import { logStep, Stack } from '@glimmer/util';
 import { debug, resetTracking } from '@glimmer/validator';
 
+import type { ErrorBoundaryStateInterface } from '../component/error-boundary';
 import type { Closure } from './append';
 import type { AppendingBlockList } from './element-builder';
 
@@ -159,6 +160,55 @@ export class TryOpcode extends BlockOpcode implements ExceptionHandler {
 
     let tree = NewTreeBuilder.resume(env, bounds);
     let vm = state.evaluate(tree);
+
+    let children = (this.children = []);
+
+    let result = vm.execute((vm) => {
+      vm.updateWith(this);
+      vm.pushUpdating(children);
+    });
+
+    associateDestroyableChild(this, result.drop);
+  }
+}
+
+export class ErrorBoundaryOpcode extends TryOpcode {
+  public type = 'error-boundary';
+
+  constructor(
+    state: Closure,
+    context: EvaluationContext,
+    bounds: ResettableBlock,
+    children: UpdatingOpcode[],
+    private errorState: ErrorBoundaryStateInterface
+  ) {
+    super(state, context, bounds, children);
+  }
+
+  override evaluate(vm: UpdatingVM) {
+    vm.try(this.children, this);
+  }
+
+  override handleException() {
+    try {
+      super.handleException();
+    } catch (error) {
+      this.transitionToError(error);
+    }
+  }
+
+  private transitionToError(error: unknown) {
+    let {
+      bounds,
+      context: { env },
+    } = this;
+
+    destroyChildren(this);
+
+    this.errorState.setError(error);
+
+    let tree = NewTreeBuilder.resume(env, bounds);
+    let vm = this.state.evaluate(tree);
 
     let children = (this.children = []);
 

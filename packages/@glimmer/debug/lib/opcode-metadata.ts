@@ -47,6 +47,7 @@ import {
   VM_HAS_BLOCK_PARAMS_OP,
   VM_HELPER_OP,
   VM_IF_INLINE_OP,
+  VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP,
   VM_INVOKE_COMPONENT_LAYOUT_OP,
   VM_INVOKE_STATIC_OP,
   VM_INVOKE_VIRTUAL_OP,
@@ -701,6 +702,13 @@ if (LOCAL_DEBUG) {
   METADATA[VM_INVOKE_COMPONENT_LAYOUT_OP] = {
     name: 'InvokeComponentLayout',
     mnemonic: 'comp_invokelayout',
+    stackChange: 0,
+    ops: ['state:register'],
+  };
+
+  METADATA[VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP] = {
+    name: 'InvokeComponentLayoutGuarded',
+    mnemonic: 'comp_invokelayout_guarded',
     stackChange: 0,
     ops: ['state:register'],
   };

@@ -52,6 +52,7 @@ const CAPABILITIES = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: true,
+  errorBoundary: false,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-extraneous-class

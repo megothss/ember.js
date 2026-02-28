@@ -9,6 +9,7 @@ import type {
   DynamicTagCapability,
   ElementHookCapability,
   EmptyCapability,
+  ErrorBoundaryCapability,
   HasSubOwnerCapability,
   MACHINE_MASK as IMACHINE_MASK,
   MAX_SIZE as IMAX_SIZE,
@@ -36,6 +37,7 @@ export const InternalComponentCapabilities = {
   wrapped: 0b0010000000000 satisfies WrappedCapability,
   willDestroy: 0b0100000000000 satisfies WillDestroyCapability,
   hasSubOwner: 0b1000000000000 satisfies HasSubOwnerCapability,
+  errorBoundary: 0b10000000000000 satisfies ErrorBoundaryCapability,
 } as const;
 
 export const ARG_SHIFT = 8 as const satisfies IARG_SHIFT;
