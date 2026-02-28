@@ -549,6 +549,7 @@ export const CURLY_CAPABILITIES: InternalComponentCapabilities = {
   wrapped: true,
   willDestroy: true,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 export const CURLY_COMPONENT_MANAGER = new CurlyComponentManager();

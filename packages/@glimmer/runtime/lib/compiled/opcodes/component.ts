@@ -38,6 +38,7 @@ import {
   VM_GET_COMPONENT_LAYOUT_OP,
   VM_GET_COMPONENT_SELF_OP,
   VM_GET_COMPONENT_TAG_NAME_OP,
+  VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP,
   VM_INVOKE_COMPONENT_LAYOUT_OP,
   VM_MAIN_OP,
   VM_POPULATE_LAYOUT_OP,
@@ -68,7 +69,7 @@ import {
   CheckSyscallRegister,
 } from '@glimmer/debug';
 import { debugToString, expect, localAssert, unwrap, unwrapTemplate } from '@glimmer/debug-util';
-import { registerDestructor } from '@glimmer/destroyable';
+import { associateDestroyableChild, destroyChildren, registerDestructor } from '@glimmer/destroyable';
 import { managerHasCapability } from '@glimmer/manager';
 import { isConstRef, valueForRef } from '@glimmer/reference';
 import { assign, dict, EMPTY_STRING_ARRAY, enumerate } from '@glimmer/util';
@@ -78,8 +79,11 @@ import type { CurriedValue } from '../../curried-value';
 import type { UpdatingVM } from '../../vm';
 import type { VM } from '../../vm/append';
 import type { BlockArgumentsImpl } from '../../vm/arguments';
+import { NewTreeBuilder } from '../../vm/element-builder';
+import { ErrorBoundaryOpcode } from '../../vm/update';
 
-import { ConcreteBounds } from '../../bounds';
+import { clear, ConcreteBounds } from '../../bounds';
+import type { ErrorBoundaryStateInterface } from '../../component/error-boundary';
 import { hasCustomDebugRenderTreeLifecycle } from '../../component/interfaces';
 import { resolveComponent } from '../../component/resolve';
 import { isCurriedType, isCurriedValue, resolveCurriedValue } from '../../curried-value';
@@ -873,6 +877,75 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_OP, (vm, { op1: register }) => {
   let state = check(vm.fetchValue(check(register, CheckRegister)), CheckFinishedComponentInstance);
 
   vm.call(state.handle);
+});
+
+// Error Boundary Guarded Invocation
+// Executes the component layout in a sub-VM wrapped in try-catch.
+// On error during initial render, cleans up partial DOM and re-renders with error state.
+APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }) => {
+  let state = check(vm.fetchValue(check(register, CheckRegister)), CheckFinishedComponentInstance);
+  let errorState = state.state as ErrorBoundaryStateInterface;
+
+  // Capture current scope (which has self, named args, blocks all set up)
+  // Use the layout handle's resolved address as the closure PC so the sub-VM
+  // starts executing from the layout code directly.
+  let layoutAddr = vm.context.program.heap.getaddr(state.handle);
+  let closure = vm.capture(0, layoutAddr);
+  let block = vm.tree().pushResettableBlock();
+
+  try {
+    let subTree = NewTreeBuilder.resume(vm.env, block);
+    let subVM = closure.evaluate(subTree);
+
+    let children: UpdatingOpcode[] = [];
+    let errorBoundaryOp = new ErrorBoundaryOpcode(
+      closure,
+      vm.context,
+      block,
+      children,
+      errorState
+    );
+
+    let result = subVM.execute((subVM) => {
+      subVM.updateWith(errorBoundaryOp);
+      subVM.pushUpdating(children);
+    });
+
+    associateDestroyableChild(errorBoundaryOp, result.drop);
+    vm.associateDestroyable(errorBoundaryOp);
+    vm.updateWith(errorBoundaryOp);
+    vm.pushUpdating(children);
+  } catch (error) {
+    // Clean up any partial DOM from the failed render
+    destroyChildren(block);
+    clear(block);
+
+    // Set error state so the template takes the error branch
+    errorState.setError(error);
+
+    // Re-execute layout with error state (will render the error block)
+    let retryTree = NewTreeBuilder.resume(vm.env, block);
+    let retryVM = closure.evaluate(retryTree);
+
+    let children: UpdatingOpcode[] = [];
+    let errorBoundaryOp = new ErrorBoundaryOpcode(
+      closure,
+      vm.context,
+      block,
+      children,
+      errorState
+    );
+
+    let result = retryVM.execute((retryVM) => {
+      retryVM.updateWith(errorBoundaryOp);
+      retryVM.pushUpdating(children);
+    });
+
+    associateDestroyableChild(errorBoundaryOp, result.drop);
+    vm.associateDestroyable(errorBoundaryOp);
+    vm.updateWith(errorBoundaryOp);
+    vm.pushUpdating(children);
+  }
 });
 
 APPEND_OPCODES.add(VM_DID_RENDER_LAYOUT_OP, (vm, { op1: register }) => {

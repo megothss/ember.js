@@ -39,6 +39,7 @@ const CAPABILITIES = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 export function componentCapabilities<Version extends keyof ComponentCapabilitiesVersions>(

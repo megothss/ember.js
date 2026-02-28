@@ -49,6 +49,7 @@ const CAPABILITIES = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: true,
+  errorBoundary: false,
 };
 
 class MountManager

@@ -92,6 +92,7 @@ export const ROOT_CAPABILITIES: InternalComponentCapabilities = {
   wrapped: true,
   willDestroy: false,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 export class RootComponentDefinition implements ComponentDefinition {

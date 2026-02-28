@@ -2,6 +2,7 @@ import type { Registry } from '@ember/-internals/container';
 import { privatize as P } from '@ember/-internals/container';
 import { getOwner } from '@ember/-internals/owner';
 import { assert } from '@ember/debug';
+import ErrorBoundary from './components/error-boundary';
 import Input from './components/input';
 import LinkTo from './components/link-to';
 import Textarea from './components/textarea';
@@ -47,6 +48,7 @@ export function setupEngineRegistry(registry: Registry): void {
 
   registry.optionsForType('helper', { instantiate: false });
 
+  registry.register('component:error-boundary', ErrorBoundary);
   registry.register('component:input', Input);
 
   registry.register('component:link-to', LinkTo);
