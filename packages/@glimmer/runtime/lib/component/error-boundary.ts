@@ -1,5 +1,4 @@
-import { dirtyTagFor, tagFor } from '@glimmer/validator';
-import { consumeTag } from '@glimmer/validator';
+import { consumeTag, dirtyTag, dirtyTagFor, tagFor } from '@glimmer/validator';
 
 export interface ErrorBoundaryStateInterface {
   error: unknown;
@@ -24,9 +23,13 @@ export class ErrorBoundaryState implements ErrorBoundaryStateInterface {
 
   setError(error: unknown) {
     this._error = error;
-    dirtyTagFor(this, '_error');
+    // Use dirtyTag with disableConsumptionAssertion=true because setError
+    // is called from an error boundary catch handler, where the tag was
+    // already consumed during the (failed) render. This backflow is
+    // intentional for error boundary recovery.
+    dirtyTag(tagFor(this, '_error'), true);
     this._hasError = true;
-    dirtyTagFor(this, '_hasError');
+    dirtyTag(tagFor(this, '_hasError'), true);
   }
 
   retry = () => {

@@ -48,4 +48,10 @@ export interface DebugRenderTree<Bucket extends object = object> {
   commit(): void;
 
   capture(): CapturedRenderNode[];
+
+  /** Return the current depth of the internal stack (for error boundary rollback). */
+  getDepth(): number;
+
+  /** Pop entries from the internal stack down to the given depth (for error boundary rollback). */
+  rollbackTo(depth: number): void;
 }

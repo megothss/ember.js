@@ -723,6 +723,25 @@ export class VM {
 
   /// EXECUTION
 
+  /**
+   * Execute the VM for an error boundary sub-VM. Unlike `execute`, this does
+   * NOT wrap in a tracking transaction or call `resetTracking()` on error,
+   * which would destroy the parent VM's tracking state. It only cleans up
+   * open blocks on error before re-throwing.
+   */
+  executeGuarded(initialize?: (vm: this) => void): RenderResult {
+    try {
+      return this._execute(initialize);
+    } catch (e) {
+      // Clean up block stack without resetting tracking (preserve parent's state).
+      let elements = this.tree();
+      while (elements.hasBlocks) {
+        elements.popBlock();
+      }
+      throw e;
+    }
+  }
+
   execute(initialize?: (vm: this) => void): RenderResult {
     if (DEBUG) {
       let hasErrored = true;
