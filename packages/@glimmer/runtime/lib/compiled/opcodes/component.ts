@@ -79,6 +79,8 @@ import type { CurriedValue } from '../../curried-value';
 import type { UpdatingVM } from '../../vm';
 import type { VM } from '../../vm/append';
 import type { BlockArgumentsImpl } from '../../vm/arguments';
+import { getTrackingDepth, restoreTrackingTo } from '@glimmer/validator';
+
 import { NewTreeBuilder } from '../../vm/element-builder';
 import { ErrorBoundaryOpcode } from '../../vm/update';
 
@@ -893,8 +895,19 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
   let closure = vm.capture(0, layoutAddr);
   let block = vm.tree().pushResettableBlock();
 
+  // Record insertion point so we can clean up partial DOM on error.
+  let parent = block.parentElement();
+  let insertionMarker = parent.lastChild;
+
+  // Save debug render tree depth so we can roll back stale entries on error.
+  let renderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
+
+  // Save tracking frame depth so we can discard stale frames from a failed sub-VM.
+  let trackingDepth = getTrackingDepth();
+
   try {
-    let subTree = NewTreeBuilder.resume(vm.env, block);
+    // Use beginBlock (not resume) since this is a fresh block with no prior content.
+    let subTree = NewTreeBuilder.beginBlock(vm.env, block);
     let subVM = closure.evaluate(subTree);
 
     let children: UpdatingOpcode[] = [];
@@ -906,7 +919,8 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
       errorState
     );
 
-    let result = subVM.execute((subVM) => {
+    // Use executeGuarded to avoid resetting the parent VM's tracking state.
+    let result = subVM.executeGuarded((subVM) => {
       subVM.updateWith(errorBoundaryOp);
       subVM.pushUpdating(children);
     });
@@ -914,17 +928,30 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     associateDestroyableChild(errorBoundaryOp, result.drop);
     vm.associateDestroyable(errorBoundaryOp);
     vm.updateWith(errorBoundaryOp);
-    vm.pushUpdating(children);
   } catch (error) {
-    // Clean up any partial DOM from the failed render
-    destroyChildren(block);
-    clear(block);
+    // Roll back stale tracking frames left by the failed sub-VM render.
+    restoreTrackingTo(trackingDepth);
+
+    // Roll back stale debug render tree entries from the failed render.
+    vm.env.debugRenderTree?.rollbackTo(renderTreeDepth);
+
+    // Remove any partial DOM nodes inserted during the failed render.
+    // We can't use clear(block) because child bounds may be partially initialized.
+    let cursor = insertionMarker ? insertionMarker.nextSibling : parent.firstChild;
+    while (cursor) {
+      let next = cursor.nextSibling;
+      parent.removeChild(cursor);
+      cursor = next;
+    }
+
+    // Reset block to empty state for the retry render.
+    block.resetPartial();
 
     // Set error state so the template takes the error branch
     errorState.setError(error);
 
-    // Re-execute layout with error state (will render the error block)
-    let retryTree = NewTreeBuilder.resume(vm.env, block);
+    // Re-execute layout with error state (will render the error block).
+    let retryTree = NewTreeBuilder.beginBlock(vm.env, block);
     let retryVM = closure.evaluate(retryTree);
 
     let children: UpdatingOpcode[] = [];
@@ -936,7 +963,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
       errorState
     );
 
-    let result = retryVM.execute((retryVM) => {
+    let result = retryVM.executeGuarded((retryVM) => {
       retryVM.updateWith(errorBoundaryOp);
       retryVM.pushUpdating(children);
     });
@@ -944,7 +971,6 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     associateDestroyableChild(errorBoundaryOp, result.drop);
     vm.associateDestroyable(errorBoundaryOp);
     vm.updateWith(errorBoundaryOp);
-    vm.pushUpdating(children);
   }
 });
 

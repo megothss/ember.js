@@ -105,6 +105,16 @@ export default class DebugRenderTreeImpl<
     return this.captureRefs(this.roots);
   }
 
+  getDepth(): number {
+    return this.stack.size;
+  }
+
+  rollbackTo(depth: number): void {
+    while (this.stack.size > depth) {
+      this.stack.pop();
+    }
+  }
+
   private reset(): void {
     if (this.stack.size !== 0) {
       // We probably encountered an error during the rendering loop. This will

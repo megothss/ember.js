@@ -25,10 +25,12 @@ export {
   createCache,
   endTrackFrame,
   endUntrackFrame,
+  getTrackingDepth,
   getValue,
   isConst,
   isTracking,
   resetTracking,
+  restoreTrackingTo,
   track,
   untrack,
 } from './lib/tracking';

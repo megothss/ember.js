@@ -105,6 +105,19 @@ export class NewTreeBuilder implements TreeBuilder {
     return stack;
   }
 
+  /**
+   * Creates a tree builder that renders into a fresh (empty) resettable block.
+   * Unlike `resume`, this does NOT call `block.reset()`, so it's safe for
+   * blocks that have never been rendered or have partially-initialized children.
+   */
+  static beginBlock(env: Environment, block: ResettableBlock): NewTreeBuilder {
+    let parentNode = block.parentElement();
+    let stack = new this(env, parentNode, null).initialize();
+    stack.pushBlock(block);
+
+    return stack;
+  }
+
   constructor(env: Environment, parentNode: SimpleElement, nextSibling: Nullable<SimpleNode>) {
     this.pushElement(parentNode, nextSibling);
     this.env = env;
@@ -515,13 +528,25 @@ export class ResettableBlockImpl extends AppendingBlockImpl implements Resettabl
 
   reset(): Nullable<SimpleNode> {
     destroy(this);
-    let nextSibling = clear(this);
+    let nextSibling = this.first ? clear(this) : null;
 
     this.first = null;
     this.last = null;
     this.nesting = 0;
 
     return nextSibling;
+  }
+
+  /**
+   * Reset the block's internal tracking state without touching the DOM.
+   * Used during error boundary recovery when the DOM has already been
+   * cleaned up manually (because child bounds may be partially initialized).
+   */
+  resetPartial(): void {
+    destroy(this);
+    this.first = null;
+    this.last = null;
+    this.nesting = 0;
   }
 }
 

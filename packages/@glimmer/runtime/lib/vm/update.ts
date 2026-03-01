@@ -20,7 +20,7 @@ import { associateDestroyableChild, destroy, destroyChildren } from '@glimmer/de
 import { LOCAL_DEBUG } from '@glimmer/local-debug-flags';
 import { updateRef, valueForRef } from '@glimmer/reference';
 import { logStep, Stack } from '@glimmer/util';
-import { debug, resetTracking } from '@glimmer/validator';
+import { debug, getTrackingDepth, resetTracking, restoreTrackingTo } from '@glimmer/validator';
 
 import type { ErrorBoundaryStateInterface } from '../component/error-boundary';
 import type { Closure } from './append';
@@ -79,7 +79,36 @@ export class UpdatingVM implements IUpdatingVM {
         continue;
       }
 
-      opcode.evaluate(this);
+      // Save tracking frame depth so we can discard stale frames if the
+      // opcode throws a JS exception (e.g., a tracked getter throwing).
+      let trackingDepth = getTrackingDepth();
+
+      try {
+        opcode.evaluate(this);
+      } catch (error) {
+        // Restore tracking frames to the depth before the failed opcode.
+        // Without this, stale frames corrupt the parent's tracking context.
+        restoreTrackingTo(trackingDepth);
+
+        // Walk up the frame stack to find an error boundary that can handle
+        // JavaScript errors. We skip regular TryOpcode handlers because they
+        // would reset their block and re-render, which corrupts parent block
+        // references if the re-render also fails.
+        let handled = false;
+
+        while (!frameStack.isEmpty()) {
+          if (this.frame.handleError(error)) {
+            frameStack.pop();
+            handled = true;
+            break;
+          }
+          frameStack.pop();
+        }
+
+        if (!handled) {
+          throw error;
+        }
+      }
     }
   }
 
@@ -195,6 +224,15 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     } catch (error) {
       this.transitionToError(error);
     }
+  }
+
+  /**
+   * Handle a JavaScript error that escaped during updating evaluation.
+   * Called directly by the UpdatingVM when a JS exception occurs,
+   * skipping inner TryOpcode handlers that would corrupt block state.
+   */
+  handleError(error: unknown) {
+    this.transitionToError(error);
   }
 
   private transitionToError(error: unknown) {
@@ -490,5 +528,22 @@ class UpdatingVMFrame {
     if (this.exceptionHandler) {
       this.exceptionHandler.handleException();
     }
+  }
+
+  /**
+   * Try to handle a JavaScript error (not a tracked-value change).
+   * Returns true if the handler accepted the error, false otherwise.
+   * Only error boundary handlers accept JavaScript errors.
+   */
+  handleError(error: unknown): boolean {
+    if (
+      this.exceptionHandler &&
+      'handleError' in this.exceptionHandler &&
+      typeof (this.exceptionHandler as any).handleError === 'function'
+    ) {
+      (this.exceptionHandler as any).handleError(error);
+      return true;
+    }
+    return false;
   }
 }
