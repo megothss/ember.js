@@ -12,6 +12,7 @@ interface DebugTransaction {
   runInTrackingTransaction?: undefined | (<T>(fn: () => T, debuggingContext?: string | false) => T);
 
   resetTrackingTransaction?: undefined | (() => string);
+  resetConsumedTags?: undefined | (() => void);
   setTrackingTransactionEnv?:
     | undefined
     | ((env: { debugMessage?(obj?: unknown, keyName?: string): string }) => void);
@@ -85,6 +86,19 @@ if (DEBUG) {
 
     if (TRANSACTION_STACK.length === 0) {
       CONSUMED_TAGS = null;
+    }
+  };
+
+  /**
+   * Replace CONSUMED_TAGS with a fresh WeakMap, discarding all entries.
+   * Used during error boundary recovery: tracking frames from a failed render
+   * are popped via restoreTrackingTo(), but their consumed-tag entries persist
+   * in the WeakMap because it can't be selectively pruned. Without this,
+   * stale entries cause spurious backtracking assertions on later mutations.
+   */
+  debug.resetConsumedTags = () => {
+    if (TRANSACTION_STACK.length > 0) {
+      CONSUMED_TAGS = new WeakMap();
     }
   };
 
