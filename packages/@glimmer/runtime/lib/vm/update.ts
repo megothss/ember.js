@@ -11,6 +11,7 @@ import type {
   ResettableBlock,
   Scope,
   SimpleComment,
+  SimpleNode,
   UpdatingOpcode,
   UpdatingVM as IUpdatingVM,
 } from '@glimmer/interfaces';
@@ -204,6 +205,14 @@ export class TryOpcode extends BlockOpcode implements ExceptionHandler {
 export class ErrorBoundaryOpcode extends TryOpcode {
   public type = 'error-boundary';
 
+  // Cache DOM references from the last successful render so we can clean up
+  // even when the bounds tree is corrupted by a failed inner re-render.
+  // We cache the first node, and the nextSibling AFTER the last node, so that
+  // cleanup removes everything from firstNode up to (but not including)
+  // nextSibling — including any dynamically inserted nodes like list markers.
+  private lastFirstNode: SimpleNode | null = null;
+  private lastNextSibling: SimpleNode | null = null;
+
   constructor(
     state: Closure,
     context: EvaluationContext,
@@ -215,6 +224,17 @@ export class ErrorBoundaryOpcode extends TryOpcode {
   }
 
   override evaluate(vm: UpdatingVM) {
+    // Snapshot current DOM boundaries before child opcodes run.
+    // We need the nextSibling after lastNode (not lastNode itself) because
+    // child opcodes may insert temporary nodes (e.g., list sync markers)
+    // after lastNode. Using nextSibling ensures cleanup covers those too.
+    try {
+      this.lastFirstNode = this.bounds.firstNode();
+      this.lastNextSibling = this.bounds.lastNode().nextSibling;
+    } catch {
+      // Bounds not yet initialized (first render) — no cache needed.
+    }
+
     vm.try(this.children, this);
   }
 
@@ -245,7 +265,28 @@ export class ErrorBoundaryOpcode extends TryOpcode {
 
     this.errorState.setError(error);
 
-    let tree = NewTreeBuilder.resume(env, bounds);
+    // Clean up DOM manually rather than using bounds.reset() (via resume()),
+    // because the bounds tree may be corrupted: inner TryOpcodes or
+    // ListBlockOpcodes can leave child blocks with null first/last pointers,
+    // and list sync may have inserted temporary marker nodes outside the
+    // bounds tree. Walking the DOM directly using cached node references
+    // handles both cases.
+    let parent = bounds.parentElement();
+
+    if (this.lastFirstNode && this.lastFirstNode.parentNode === parent) {
+      let current: SimpleNode | null = this.lastFirstNode;
+      let stop = this.lastNextSibling;
+
+      while (current && current !== stop) {
+        let next: SimpleNode | null = current.nextSibling;
+        parent.removeChild(current);
+        current = next;
+      }
+    }
+
+    bounds.resetPartial();
+    let tree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
+
     let vm = this.state.evaluate(tree);
 
     let children = (this.children = []);
