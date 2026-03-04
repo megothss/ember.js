@@ -287,9 +287,7 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // Save insertion marker: the sibling just before the boundary's content.
     // After resume() removes old DOM via bounds.reset(), any nodes between
     // this marker and lastNextSibling are partial leftovers from a failed render.
-    let insertionMarker = this.lastFirstNode
-      ? this.lastFirstNode.previousSibling
-      : null;
+    let insertionMarker = this.lastFirstNode ? this.lastFirstNode.previousSibling : null;
 
     destroyChildren(this);
 
@@ -705,12 +703,8 @@ class UpdatingVMFrame {
    * Only error boundary handlers accept JavaScript errors.
    */
   handleError(error: unknown): boolean {
-    if (
-      this.exceptionHandler &&
-      'handleError' in this.exceptionHandler &&
-      typeof (this.exceptionHandler as any).handleError === 'function'
-    ) {
-      (this.exceptionHandler as any).handleError(error);
+    if (this.exceptionHandler?.handleError) {
+      this.exceptionHandler.handleError(error);
       return true;
     }
     return false;

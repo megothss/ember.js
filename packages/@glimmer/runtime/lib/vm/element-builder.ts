@@ -114,7 +114,11 @@ export class NewTreeBuilder implements TreeBuilder {
    *   is inserted before this node instead of appended at the end. Used by
    *   error boundary recovery to maintain correct position among siblings.
    */
-  static beginBlock(env: Environment, block: ResettableBlock, nextSibling?: Nullable<SimpleNode>): NewTreeBuilder {
+  static beginBlock(
+    env: Environment,
+    block: ResettableBlock,
+    nextSibling?: Nullable<SimpleNode>
+  ): NewTreeBuilder {
     let parentNode = block.parentElement();
     let stack = new this(env, parentNode, nextSibling ?? null).initialize();
     stack.pushBlock(block);

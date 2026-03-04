@@ -6,6 +6,7 @@ import type { Environment } from './environment.js';
 
 export interface ExceptionHandler {
   handleException(): void;
+  handleError?(error: unknown): void;
 }
 
 export interface RenderResult extends Bounds, ExceptionHandler {

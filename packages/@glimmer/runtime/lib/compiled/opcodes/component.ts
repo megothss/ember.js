@@ -69,7 +69,7 @@ import {
   CheckSyscallRegister,
 } from '@glimmer/debug';
 import { debugToString, expect, localAssert, unwrap, unwrapTemplate } from '@glimmer/debug-util';
-import { associateDestroyableChild, destroyChildren, registerDestructor } from '@glimmer/destroyable';
+import { associateDestroyableChild, registerDestructor } from '@glimmer/destroyable';
 import { managerHasCapability } from '@glimmer/manager';
 import { isConstRef, valueForRef } from '@glimmer/reference';
 import { assign, dict, EMPTY_STRING_ARRAY, enumerate } from '@glimmer/util';
@@ -84,7 +84,7 @@ import { getTrackingDepth, restoreTrackingTo } from '@glimmer/validator';
 import { NewTreeBuilder } from '../../vm/element-builder';
 import { ErrorBoundaryOpcode } from '../../vm/update';
 
-import { clear, ConcreteBounds } from '../../bounds';
+import { ConcreteBounds } from '../../bounds';
 import type { ErrorBoundaryStateInterface } from '../../component/error-boundary';
 import { hasCustomDebugRenderTreeLifecycle } from '../../component/interfaces';
 import { resolveComponent } from '../../component/resolve';
@@ -911,13 +911,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     let subVM = closure.evaluate(subTree);
 
     let children: UpdatingOpcode[] = [];
-    let errorBoundaryOp = new ErrorBoundaryOpcode(
-      closure,
-      vm.context,
-      block,
-      children,
-      errorState
-    );
+    let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
 
     // Use executeGuarded to avoid resetting the parent VM's tracking state.
     let result = subVM.executeGuarded((subVM) => {
@@ -955,13 +949,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     let retryVM = closure.evaluate(retryTree);
 
     let children: UpdatingOpcode[] = [];
-    let errorBoundaryOp = new ErrorBoundaryOpcode(
-      closure,
-      vm.context,
-      block,
-      children,
-      errorState
-    );
+    let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
 
     let result = retryVM.executeGuarded((retryVM) => {
       retryVM.updateWith(errorBoundaryOp);
