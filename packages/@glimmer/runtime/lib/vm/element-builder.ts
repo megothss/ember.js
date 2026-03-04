@@ -109,10 +109,14 @@ export class NewTreeBuilder implements TreeBuilder {
    * Creates a tree builder that renders into a fresh (empty) resettable block.
    * Unlike `resume`, this does NOT call `block.reset()`, so it's safe for
    * blocks that have never been rendered or have partially-initialized children.
+   *
+   * @param nextSibling - Optional insertion point. When provided, new content
+   *   is inserted before this node instead of appended at the end. Used by
+   *   error boundary recovery to maintain correct position among siblings.
    */
-  static beginBlock(env: Environment, block: ResettableBlock): NewTreeBuilder {
+  static beginBlock(env: Environment, block: ResettableBlock, nextSibling?: Nullable<SimpleNode>): NewTreeBuilder {
     let parentNode = block.parentElement();
-    let stack = new this(env, parentNode, null).initialize();
+    let stack = new this(env, parentNode, nextSibling ?? null).initialize();
     stack.pushBlock(block);
 
     return stack;
