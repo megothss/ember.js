@@ -228,12 +228,18 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // We need the nextSibling after lastNode (not lastNode itself) because
     // child opcodes may insert temporary nodes (e.g., list sync markers)
     // after lastNode. Using nextSibling ensures cleanup covers those too.
-    try {
-      this.lastFirstNode = this.bounds.firstNode();
-      this.lastNextSibling = this.bounds.lastNode().nextSibling;
-    } catch {
-      // Bounds not yet initialized (first render) — no cache needed.
+    //
+    // Bounds are always initialized here because:
+    // - Initial render completes (with finalize()) before UpdatingVM is created.
+    // - transitionToError() re-renders synchronously, repopulating bounds.
+    if (LOCAL_DEBUG) {
+      expect(
+        this.bounds.firstNode(),
+        'BUG: ErrorBoundaryOpcode.evaluate() called with uninitialized bounds'
+      );
     }
+    this.lastFirstNode = this.bounds.firstNode();
+    this.lastNextSibling = this.bounds.lastNode().nextSibling;
 
     vm.try(this.children, this);
   }
@@ -297,6 +303,11 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     });
 
     associateDestroyableChild(this, result.drop);
+
+    // Clear cached DOM references — they pointed at the pre-error content
+    // which has been removed. Fresh values are captured in the next evaluate().
+    this.lastFirstNode = null;
+    this.lastNextSibling = null;
   }
 }
 
