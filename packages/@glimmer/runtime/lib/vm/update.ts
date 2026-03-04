@@ -193,7 +193,13 @@ export class TryOpcode extends BlockOpcode implements ExceptionHandler {
 
     let children = (this.children = []);
 
-    let result = vm.execute((vm) => {
+    // Use executeGuarded() instead of execute() to prevent resetTracking()
+    // from being called if the re-render throws. resetTracking() wipes ALL
+    // tracking state (including parent frames), which corrupts the UpdatingVM's
+    // tracking context and causes "attempted to close a tracking frame, but one
+    // was not open" errors. With executeGuarded(), errors propagate to the
+    // UpdatingVM's catch handler, which can route them to an error boundary.
+    let result = vm.executeGuarded((vm) => {
       vm.updateWith(this);
       vm.pushUpdating(children);
     });
@@ -207,11 +213,17 @@ export class ErrorBoundaryOpcode extends TryOpcode {
 
   // Cache DOM references from the last successful render so we can clean up
   // even when the bounds tree is corrupted by a failed inner re-render.
-  // We cache the first node, and the nextSibling AFTER the last node, so that
-  // cleanup removes everything from firstNode up to (but not including)
-  // nextSibling — including any dynamically inserted nodes like list markers.
+  // We cache the first node, its previous sibling, and the nextSibling AFTER
+  // the last node, so that cleanup removes everything from firstNode up to
+  // (but not including) nextSibling — including any dynamically inserted nodes
+  // like list markers. The previousSibling is needed because inner TryOpcodes
+  // may detach lastFirstNode from the DOM via bounds.reset() before the error
+  // reaches us.
   private lastFirstNode: SimpleNode | null = null;
+  private lastPreviousSibling: SimpleNode | null = null;
   private lastNextSibling: SimpleNode | null = null;
+  private lastRenderTreeDepth = 0;
+  private lastTrackingDepth = 0;
 
   constructor(
     state: Closure,
@@ -239,16 +251,97 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       );
     }
     this.lastFirstNode = this.bounds.firstNode();
+    this.lastPreviousSibling = this.lastFirstNode.previousSibling;
     this.lastNextSibling = this.bounds.lastNode().nextSibling;
+    this.lastRenderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
+    this.lastTrackingDepth = getTrackingDepth();
 
     vm.try(this.children, this);
   }
 
   override handleException() {
+    let {
+      bounds,
+      context: { env },
+    } = this;
+    let parent = bounds.parentElement();
+
+    // Restore tracking to the depth captured in evaluate(), BEFORE children
+    // ran. When vm.throw() is called (e.g. by an Assert opcode), it
+    // short-circuits the children's frame — any tracking frames opened by
+    // BeginTrackFrameOpcode will never see their matching EndTrackFrameOpcode.
+    // Without this, stale frames (and their DEBUG tracking transactions) leak
+    // onto OPEN_TRACK_FRAMES / TRANSACTION_STACK, keeping CONSUMED_TAGS alive
+    // and causing spurious backtracking assertions on later mutations.
+    restoreTrackingTo(this.lastTrackingDepth);
+    // Discard consumed-tag entries from the popped tracking frames. The
+    // CONSUMED_TAGS WeakMap can't be selectively pruned, so replace it
+    // with a fresh one. Without this, stale entries (e.g. a @tracked
+    // property consumed during the failed render) cause backtracking
+    // assertions when the property is later mutated outside the render.
+    if (DEBUG) {
+      debug.resetConsumedTags?.();
+    }
+    let trackingDepth = this.lastTrackingDepth;
+
+    // Save insertion marker: the sibling just before the boundary's content.
+    // After resume() removes old DOM via bounds.reset(), any nodes between
+    // this marker and lastNextSibling are partial leftovers from a failed render.
+    let insertionMarker = this.lastFirstNode
+      ? this.lastFirstNode.previousSibling
+      : null;
+
+    destroyChildren(this);
+
     try {
-      super.handleException();
+      // Attempt a normal re-render like TryOpcode.handleException(), but use
+      // executeGuarded() instead of execute(). In DEBUG mode, execute() calls
+      // resetTracking() on error, which wipes out the parent UpdatingVM's
+      // tracking transaction (TRANSACTION_STACK / CONSUMED_TAGS), causing
+      // spurious backtracking assertions on later tracked property mutations.
+      let tree = NewTreeBuilder.resume(env, bounds);
+      let vm = this.state.evaluate(tree);
+      let children = (this.children = []);
+      let result = vm.executeGuarded((vm) => {
+        vm.updateWith(this);
+        vm.pushUpdating(children);
+      });
+      associateDestroyableChild(this, result.drop);
     } catch (error) {
-      this.transitionToError(error);
+      // Restore tracking frames opened by the failed re-render attempt.
+      restoreTrackingTo(trackingDepth);
+
+      // Roll back stale debug render tree entries.
+      env.debugRenderTree?.rollbackTo(this.lastRenderTreeDepth);
+
+      // Remove partial DOM nodes left by the failed re-render.
+      // resume() already removed old content via bounds.reset(), so any nodes
+      // between insertionMarker and lastNextSibling are from the failed render.
+      let cursor: SimpleNode | null = insertionMarker
+        ? insertionMarker.nextSibling
+        : parent.firstChild;
+      let stop = this.lastNextSibling;
+      while (cursor && cursor !== stop) {
+        let next: SimpleNode | null = cursor.nextSibling;
+        parent.removeChild(cursor);
+        cursor = next;
+      }
+
+      bounds.resetPartial();
+      this.errorState.setError(error);
+
+      let retryTree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
+      let retryVM = this.state.evaluate(retryTree);
+      let children = (this.children = []);
+      let result = retryVM.executeGuarded((vm) => {
+        vm.updateWith(this);
+        vm.pushUpdating(children);
+      });
+      associateDestroyableChild(this, result.drop);
+
+      this.lastFirstNode = null;
+      this.lastPreviousSibling = null;
+      this.lastNextSibling = null;
     }
   }
 
@@ -258,6 +351,14 @@ export class ErrorBoundaryOpcode extends TryOpcode {
    * skipping inner TryOpcode handlers that would corrupt block state.
    */
   handleError(error: unknown) {
+    // Restore tracking to the depth from evaluate(), before children ran.
+    // _execute's catch only restores to the depth of the failing opcode,
+    // which doesn't cover tracking frames opened by earlier opcodes
+    // (like BeginTrackFrameOpcode) in the children's frame.
+    restoreTrackingTo(this.lastTrackingDepth);
+    if (DEBUG) {
+      debug.resetConsumedTags?.();
+    }
     this.transitionToError(error);
   }
 
@@ -279,8 +380,18 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // handles both cases.
     let parent = bounds.parentElement();
 
-    if (this.lastFirstNode && this.lastFirstNode.parentNode === parent) {
-      let current: SimpleNode | null = this.lastFirstNode;
+    if (this.lastFirstNode) {
+      // Determine cleanup start: if lastFirstNode is still in the DOM, start
+      // there. If it was detached (by an inner TryOpcode's bounds.reset()),
+      // use the cached previousSibling to find the current start point.
+      let current: SimpleNode | null;
+      if (this.lastFirstNode.parentNode === parent) {
+        current = this.lastFirstNode;
+      } else if (this.lastPreviousSibling) {
+        current = this.lastPreviousSibling.nextSibling;
+      } else {
+        current = parent.firstChild;
+      }
       let stop = this.lastNextSibling;
 
       while (current && current !== stop) {
@@ -290,6 +401,11 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       }
     }
 
+    // Roll back the debug render tree stack to discard stale entries left by
+    // DebugRenderTreeUpdateOpcodes that pushed but never got their matching
+    // DebugRenderTreeDidRenderOpcode pop due to the error.
+    env.debugRenderTree?.rollbackTo(this.lastRenderTreeDepth);
+
     bounds.resetPartial();
     let tree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
 
@@ -297,7 +413,7 @@ export class ErrorBoundaryOpcode extends TryOpcode {
 
     let children = (this.children = []);
 
-    let result = vm.execute((vm) => {
+    let result = vm.executeGuarded((vm) => {
       vm.updateWith(this);
       vm.pushUpdating(children);
     });
@@ -307,6 +423,7 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // Clear cached DOM references — they pointed at the pre-error content
     // which has been removed. Fresh values are captured in the next evaluate().
     this.lastFirstNode = null;
+    this.lastPreviousSibling = null;
     this.lastNextSibling = null;
   }
 }
@@ -500,7 +617,7 @@ export class ListBlockOpcode extends BlockOpcode {
 
     let vm = state.evaluate(elementStack);
 
-    vm.execute((vm) => {
+    vm.executeGuarded((vm) => {
       let opcode = vm.enterItem(item);
 
       opcode.index = children.length;

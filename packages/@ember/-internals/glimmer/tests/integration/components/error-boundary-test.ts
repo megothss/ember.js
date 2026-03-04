@@ -550,5 +550,166 @@ moduleFor(
         expect: 'caught',
       });
     }
+
+    // --- Regression tests for tracking state corruption bugs ---
+
+    '@test rerender error then fix state and retry recovers'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error via rerender
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix state and retry — must not cause backtracking assertion
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test repeated rerender errors do not corrupt tracking state'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // First trigger
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Second trigger (same value — still dirties tag, causes revalidation)
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test error in error block fallback bubbles to parent boundary'() {
+      let ThrowingFallback = defComponent('{{this.boom}}', {
+        component: class extends GlimmerishComponent {
+          get boom(): never {
+            throw new Error('fallback error');
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><ErrorBoundary><:default><Throwing /></:default><:error as |err|><ThrowingFallback /></:error></ErrorBoundary></:default><:error as |err|>outer caught: {{err.message}}</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, Throwing, ThrowingFallback } }
+      );
+
+      this.renderComponent(Root, { expect: 'outer caught: fallback error' });
+    }
+
+    '@test each loop insert error then retry recovers'() {
+      class State {
+        @tracked items = ['a', 'b'];
+      }
+      let state = new State();
+
+      let ItemComponent = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.item === 'bomb') {
+              throw new Error('bomb');
+            }
+            return (this as any).args.item;
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ItemComponent, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ab' });
+
+      // Add bad item — triggers insertItem path
+      this.assertChange({
+        change: () => (state.items = ['a', 'b', 'bomb']),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry
+      state.items = ['a', 'b'];
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ab',
+      });
+    }
+
+    '@test each loop repeated insert errors then retry recovers'() {
+      class State {
+        @tracked items = ['a', 'b'];
+      }
+      let state = new State();
+
+      let ItemComponent = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.item === 'bomb') {
+              throw new Error('bomb');
+            }
+            return (this as any).args.item;
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ItemComponent, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ab' });
+
+      // First bad mutation
+      this.assertChange({
+        change: () => (state.items = ['a', 'b', 'bomb']),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Second bad mutation while in error state
+      this.assertChange({
+        change: () => (state.items = ['a', 'bomb', 'c']),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry
+      state.items = ['x', 'y'];
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'xy',
+      });
+    }
   }
 );
