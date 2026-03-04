@@ -116,9 +116,10 @@ export function restoreTrackingTo(depth: number): void {
       unwrap(debug.endTrackingTransaction)();
     }
   }
-  CURRENT_TRACKER = OPEN_TRACK_FRAMES.length > 0
-    ? OPEN_TRACK_FRAMES[OPEN_TRACK_FRAMES.length - 1]
-    : null;
+  CURRENT_TRACKER =
+    OPEN_TRACK_FRAMES.length > 0
+      ? (OPEN_TRACK_FRAMES[OPEN_TRACK_FRAMES.length - 1] as Tracker)
+      : null;
 }
 
 // This function is only for handling errors and resetting to a valid state

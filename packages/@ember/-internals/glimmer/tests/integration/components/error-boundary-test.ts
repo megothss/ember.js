@@ -65,10 +65,7 @@ class ErrorBoundaryTestCase extends AbstractStrictTestCase {
     this.assertStableRerender();
   }
 
-  renderComponent(
-    component: object,
-    options: { args?: Record<string, unknown>; expect: string }
-  ) {
+  renderComponent(component: object, options: { args?: Record<string, unknown>; expect: string }) {
     let { owner } = this;
 
     run(() => {
@@ -193,13 +190,15 @@ moduleFor(
       }
       let state = new State();
 
+      class CounterComponent extends GlimmerishComponent {
+        @tracked count = 0;
+        increment = () => this.count++;
+      }
+
       let Counter = defComponent(
         '<span>{{this.count}}</span><button {{on "click" this.increment}}>+</button>',
         {
-          component: class extends GlimmerishComponent {
-            @tracked count = 0;
-            increment = () => this.count++;
-          },
+          component: CounterComponent,
           scope: { on },
         }
       );
@@ -271,7 +270,7 @@ moduleFor(
       }
       let state = new State();
 
-      let maybeThrowHelper = defineSimpleHelper((shouldThrow: boolean) => {
+      let maybeThrowHelper = defineSimpleHelper((shouldThrow: unknown) => {
         if (shouldThrow) throw new Error('helper rerender error');
         return 'helper ok';
       });
