@@ -306,6 +306,11 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       });
       associateDestroyableChild(this, result.drop);
     } catch (error) {
+      if (DEBUG) {
+        // eslint-disable-next-line no-console
+        console.error('An error was caught by <ErrorBoundary>:', error);
+      }
+
       // Restore tracking frames opened by the failed re-render attempt.
       restoreTrackingTo(trackingDepth);
 
@@ -349,6 +354,10 @@ export class ErrorBoundaryOpcode extends TryOpcode {
    * skipping inner TryOpcode handlers that would corrupt block state.
    */
   handleError(error: unknown) {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.error('An error was caught by <ErrorBoundary>:', error);
+    }
     // Restore tracking to the depth from evaluate(), before children ran.
     // _execute's catch only restores to the depth of the failing opcode,
     // which doesn't cover tracking frames opened by earlier opcodes

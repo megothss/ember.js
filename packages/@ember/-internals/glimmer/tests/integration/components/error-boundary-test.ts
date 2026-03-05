@@ -118,6 +118,79 @@ moduleFor(
       this.renderComponent(Root, { expect: 'caught' });
     }
 
+    /* eslint-disable no-console */
+    '@test logs caught error to console.error in DEBUG mode during initial render'(assert: Assert) {
+      let originalConsoleError = console.error;
+      let errors: unknown[][] = [];
+      console.error = (...args: unknown[]) => errors.push(args);
+
+      try {
+        let Root = defComponent(
+          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { scope: { ErrorBoundary, Throwing } }
+        );
+
+        this.renderComponent(Root, { expect: 'caught' });
+
+        assert.ok(errors.length > 0, 'console.error was called');
+        assert.strictEqual(
+          errors[0]![0],
+          'An error was caught by <ErrorBoundary>:',
+          'logs the expected message'
+        );
+        assert.ok(errors[0]![1] instanceof Error, 'logs the error object');
+        assert.strictEqual(
+          (errors[0]![1] as Error).message,
+          'render error',
+          'logs the correct error'
+        );
+      } finally {
+        console.error = originalConsoleError;
+      }
+    }
+
+    '@test logs caught error to console.error in DEBUG mode during rerender'(assert: Assert) {
+      let originalConsoleError = console.error;
+      let errors: unknown[][] = [];
+
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Start capturing after initial render
+      console.error = (...args: unknown[]) => errors.push(args);
+
+      try {
+        this.assertChange({
+          change: () => (state.shouldThrow = true),
+          expect: 'caught',
+        });
+
+        assert.ok(errors.length > 0, 'console.error was called during rerender');
+        assert.strictEqual(
+          errors[0]![0],
+          'An error was caught by <ErrorBoundary>:',
+          'logs the expected message'
+        );
+        assert.strictEqual(
+          (errors[0]![1] as Error).message,
+          'conditional error',
+          'logs the correct error'
+        );
+      } finally {
+        console.error = originalConsoleError;
+      }
+    }
+    /* eslint-enable no-console */
+
     '@test passes error object to error block'() {
       let Root = defComponent(
         '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',

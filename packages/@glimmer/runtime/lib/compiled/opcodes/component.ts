@@ -923,6 +923,11 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     vm.associateDestroyable(errorBoundaryOp);
     vm.updateWith(errorBoundaryOp);
   } catch (error) {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.error('An error was caught by <ErrorBoundary>:', error);
+    }
+
     // Roll back stale tracking frames left by the failed sub-VM render.
     restoreTrackingTo(trackingDepth);
 
