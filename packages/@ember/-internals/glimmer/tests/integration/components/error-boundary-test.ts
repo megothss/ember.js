@@ -10,6 +10,7 @@ import {
   runDestroy,
 } from 'internal-test-helpers';
 
+import { DEBUG } from '@glimmer/env';
 import { ErrorBoundary, setComponentManager } from '@ember/component';
 import { array, on } from '@glimmer/runtime';
 import { tracked } from '@glimmer/tracking';
@@ -120,6 +121,11 @@ moduleFor(
 
     /* eslint-disable no-console */
     '@test logs caught error to console.error in DEBUG mode during initial render'(assert: Assert) {
+      if (!DEBUG) {
+        assert.expect(0);
+        return;
+      }
+
       let originalConsoleError = console.error;
       let errors: unknown[][] = [];
       console.error = (...args: unknown[]) => errors.push(args);
@@ -150,6 +156,11 @@ moduleFor(
     }
 
     '@test logs caught error to console.error in DEBUG mode during rerender'(assert: Assert) {
+      if (!DEBUG) {
+        assert.expect(0);
+        return;
+      }
+
       let originalConsoleError = console.error;
       let errors: unknown[][] = [];
 
