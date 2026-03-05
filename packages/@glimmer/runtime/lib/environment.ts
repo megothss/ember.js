@@ -58,38 +58,62 @@ class TransactionImpl implements Transaction {
 
     let { scheduledInstallModifiers, scheduledUpdateModifiers } = this;
 
-    for (const { manager, state, definition } of scheduledInstallModifiers) {
-      let modifierTag = manager.getTag(state);
+    // Isolate each modifier install/update in a try-catch so that a single
+    // failing modifier does not prevent the remaining modifiers from being
+    // installed. Without this, all modifiers scheduled after the throwing one
+    // would be silently skipped, leaving their associated DOM elements without
+    // event listeners or other modifier behaviour. The first error encountered
+    // is re-thrown after all modifiers have been processed.
+    let firstError: unknown = null;
 
-      if (modifierTag !== null) {
-        let tag = track(
-          () => manager.install(state),
-          DEBUG &&
-            `- While rendering:\n  (instance of a \`${
-              definition.resolvedName || manager.getDebugName(definition.state)
-            }\` modifier)`
-        );
-        updateTag(modifierTag, tag);
-      } else {
-        manager.install(state);
+    for (const { manager, state, definition } of scheduledInstallModifiers) {
+      try {
+        let modifierTag = manager.getTag(state);
+
+        if (modifierTag !== null) {
+          let tag = track(
+            () => manager.install(state),
+            DEBUG &&
+              `- While rendering:\n  (instance of a \`${
+                definition.resolvedName || manager.getDebugName(definition.state)
+              }\` modifier)`
+          );
+          updateTag(modifierTag, tag);
+        } else {
+          manager.install(state);
+        }
+      } catch (e) {
+        if (firstError === null) {
+          firstError = e;
+        }
       }
     }
 
     for (const { manager, state, definition } of scheduledUpdateModifiers) {
-      let modifierTag = manager.getTag(state);
+      try {
+        let modifierTag = manager.getTag(state);
 
-      if (modifierTag !== null) {
-        let tag = track(
-          () => manager.update(state),
-          DEBUG &&
-            `- While rendering:\n  (instance of a \`${
-              definition.resolvedName || manager.getDebugName(definition.state)
-            }\` modifier)`
-        );
-        updateTag(modifierTag, tag);
-      } else {
-        manager.update(state);
+        if (modifierTag !== null) {
+          let tag = track(
+            () => manager.update(state),
+            DEBUG &&
+              `- While rendering:\n  (instance of a \`${
+                definition.resolvedName || manager.getDebugName(definition.state)
+              }\` modifier)`
+          );
+          updateTag(modifierTag, tag);
+        } else {
+          manager.update(state);
+        }
+      } catch (e) {
+        if (firstError === null) {
+          firstError = e;
+        }
       }
+    }
+
+    if (firstError !== null) {
+      throw firstError;
     }
   }
 }
