@@ -237,13 +237,6 @@ export class ErrorBoundaryOpcode extends TryOpcode {
 
   override evaluate(vm: UpdatingVM) {
     // Snapshot current DOM boundaries before child opcodes run.
-    // We need the nextSibling after lastNode (not lastNode itself) because
-    // child opcodes may insert temporary nodes (e.g., list sync markers)
-    // after lastNode. Using nextSibling ensures cleanup covers those too.
-    //
-    // Bounds are always initialized here because:
-    // - Initial render completes (with finalize()) before UpdatingVM is created.
-    // - transitionToError() re-renders synchronously, repopulating bounds.
     if (LOCAL_DEBUG) {
       expect(
         this.bounds.firstNode(),
@@ -255,6 +248,20 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     this.lastNextSibling = this.bounds.lastNode().nextSibling;
     this.lastRenderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
     this.lastTrackingDepth = getTrackingDepth();
+
+    // Always consume hasError so its tag is captured in the EB's tracking
+    // frame. Without this, after error recovery the EB's JumpIfNotModified
+    // combined tag would lose hasError and never detect future changes.
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    this.errorState.hasError;
+
+    // Check @retryWith: consumes the retryWith ref's tag (keeping it in the
+    // EB's tracking frame) and, if the value changed while in error state,
+    // clears the error and returns true to trigger a re-render.
+    if (this.errorState.checkRetryWith()) {
+      this.handleException();
+      return;
+    }
 
     vm.try(this.children, this);
   }
@@ -306,11 +313,6 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       });
       associateDestroyableChild(this, result.drop);
     } catch (error) {
-      if (DEBUG) {
-        // eslint-disable-next-line no-console
-        console.error('An error was caught by <ErrorBoundary>:', error);
-      }
-
       // Restore tracking frames opened by the failed re-render attempt.
       restoreTrackingTo(trackingDepth);
 
@@ -331,6 +333,11 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       }
 
       bounds.resetPartial();
+
+      if (DEBUG) {
+        // eslint-disable-next-line no-console
+        console.error('An error was caught by <ErrorBoundary>:', error);
+      }
       this.errorState.setError(error);
 
       let retryTree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
@@ -354,10 +361,6 @@ export class ErrorBoundaryOpcode extends TryOpcode {
    * skipping inner TryOpcode handlers that would corrupt block state.
    */
   handleError(error: unknown) {
-    if (DEBUG) {
-      // eslint-disable-next-line no-console
-      console.error('An error was caught by <ErrorBoundary>:', error);
-    }
     // Restore tracking to the depth from evaluate(), before children ran.
     // _execute's catch only restores to the depth of the failing opcode,
     // which doesn't cover tracking frames opened by earlier opcodes
@@ -377,6 +380,10 @@ export class ErrorBoundaryOpcode extends TryOpcode {
 
     destroyChildren(this);
 
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.error('An error was caught by <ErrorBoundary>:', error);
+    }
     this.errorState.setError(error);
 
     // Clean up DOM manually rather than using bounds.reset() (via resume()),

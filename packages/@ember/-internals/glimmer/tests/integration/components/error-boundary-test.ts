@@ -794,5 +794,388 @@ moduleFor(
         expect: 'xy',
       });
     }
+
+    // --- @retryWith tests ---
+
+    '@test @retryWith resets error state when value changes'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+        @tracked routeName = 'route-a';
+      })();
+
+      let ConditionalThrow = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.shouldThrow) {
+              throw new Error('route error');
+            }
+            return 'ok';
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ConditionalThrow, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught: route error',
+      });
+
+      // Change @retryWith value AND fix the error condition — boundary should reset
+      this.assertChange({
+        change: () => {
+          state.shouldThrow = false;
+          state.routeName = 'route-b';
+        },
+        expect: 'ok',
+      });
+    }
+
+    '@test @retryWith does not reset if value unchanged'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+        @tracked routeName = 'route-a';
+      })();
+
+      let ConditionalThrow = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.shouldThrow) {
+              throw new Error('route error');
+            }
+            return 'ok';
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ConditionalThrow, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      // Fix the throw condition but DON'T change @retryWith — should stay in error
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'caught',
+      });
+    }
+
+    '@test @retryWith re-catches if new value also causes error'() {
+      let state = new (class {
+        @tracked routeName = 'route-a';
+      })();
+
+      // Always throws regardless of route
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, Throwing, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'caught: render error' });
+
+      // Change @retryWith — boundary resets, but immediately catches again
+      this.assertChange({
+        change: () => (state.routeName = 'route-b'),
+        expect: 'caught: render error',
+      });
+    }
+
+    '@test @retryWith with retry that still throws re-catches'() {
+      let state = new (class {
+        @tracked routeName = 'route-a';
+      })();
+
+      // Always throws
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, Throwing, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'caught <button>Retry</button>' });
+
+      // Retry while error still exists — should re-catch
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+    }
+
+    '@test @retryWith rerender error then retry without fixing re-catches'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+        @tracked routeName = 'route-a';
+      })();
+
+      let ConditionalThrow = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.shouldThrow) {
+              throw new Error('route error');
+            }
+            return 'ok';
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ConditionalThrow, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error via tracked state change
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Retry WITHOUT fixing state — error should be re-caught
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+    }
+
+    '@test @retryWith with retry after fixing state recovers'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+        @tracked routeName = 'route-a';
+      })();
+
+      let ConditionalThrow = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.shouldThrow) {
+              throw new Error('route error');
+            }
+            return 'ok';
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ConditionalThrow, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix state and retry — should recover
+      state.shouldThrow = false;
+
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test multiple error-recovery cycles do not require extra retry clicks'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // --- Cycle 1: error → retry without fixing → re-catch → fix → retry → recover ---
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Retry without fixing — should re-catch
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry — should recover
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+
+      // --- Cycle 2: same sequence, should still recover in same number of clicks ---
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Retry without fixing — should re-catch
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry — should recover (NOT require extra clicks)
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+
+      // --- Cycle 3: one more to be sure ---
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test @retryWith with array value resets when element changes'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+        @tracked valA = 'a';
+        @tracked valB = 'b';
+      })();
+
+      let ConditionalThrow = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.shouldThrow) {
+              throw new Error('route error');
+            }
+            return 'ok';
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ConditionalThrow, state, array } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      // Change one array element AND fix the error — should reset
+      this.assertChange({
+        change: () => {
+          state.shouldThrow = false;
+          state.valA = 'changed';
+        },
+        expect: 'ok',
+      });
+    }
+
+    '@test @retryWith with array value does not reset if elements unchanged'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+        @tracked valA = 'a';
+        @tracked valB = 'b';
+      })();
+
+      let ConditionalThrow = defComponent('{{this.value}}', {
+        component: class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.shouldThrow) {
+              throw new Error('route error');
+            }
+            return 'ok';
+          }
+        },
+      });
+
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, ConditionalThrow, state, array } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      // Fix throw condition but DON'T change array elements — should stay in error
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'caught',
+      });
+    }
+
+    '@test @retryWith with undefined value works without error'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+      })();
+
+      // @retryWith is not passed — tests that undefined/missing arg is handled
+      let Root = defComponent(
+        '<ErrorBoundary @retryWith={{state.missing}}><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error — should still catch normally
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+    }
+
+    '@test ErrorBoundary without @retryWith stays in error state'() {
+      let state = new (class {
+        @tracked shouldThrow = false;
+      })();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      // Fix the condition — but without @retryWith, boundary stays in error
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'caught',
+      });
+    }
   }
 );
