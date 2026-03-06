@@ -116,9 +116,7 @@ moduleFor(
   'ErrorBoundary',
   class extends ErrorBoundaryTestCase {
     afterEach() {
-      if (this.component) {
-        runDestroy(this);
-      }
+      runDestroy(this);
     }
 
     '@test renders default block when no error'() {
