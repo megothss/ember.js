@@ -12,7 +12,7 @@ import type {
 } from '@glimmer/interfaces';
 import type { Reference } from '@glimmer/reference';
 import { setComponentTemplate, setInternalComponentManager } from '@glimmer/manager';
-import { createConstRef } from '@glimmer/reference';
+import { createConstRef, valueForRef } from '@glimmer/reference';
 import { ErrorBoundaryState } from '@glimmer/runtime';
 
 import ErrorBoundaryTemplate from '../templates/error-boundary';
@@ -21,12 +21,12 @@ const CAPABILITIES: InternalComponentCapabilities = {
   dynamicLayout: false,
   dynamicTag: false,
   prepareArgs: false,
-  createArgs: false,
+  createArgs: true,
   attributeHook: false,
   elementHook: false,
   createCaller: false,
   dynamicScope: false,
-  updateHook: false,
+  updateHook: true,
   createInstance: true,
   wrapped: false,
   willDestroy: false,
@@ -44,13 +44,21 @@ class ErrorBoundaryManager
   create(
     _owner: Owner,
     _definition: object,
-    _args: Nullable<VMArguments>,
+    args: Nullable<VMArguments>,
     _env: Environment,
     _dynamicScope: Nullable<DynamicScope>,
     _caller: Nullable<Reference>,
     _hasDefaultBlock: boolean
   ): ErrorBoundaryState {
-    return new ErrorBoundaryState();
+    let state = new ErrorBoundaryState();
+
+    if (args && args.named.has('retryWith')) {
+      let retryWithRef = args.named.get('retryWith');
+      state.retryWithRef = retryWithRef;
+      state._lastRetryWithValue = valueForRef(retryWithRef);
+    }
+
+    return state;
   }
 
   didCreate(): void {}
@@ -70,7 +78,17 @@ class ErrorBoundaryManager
     return null;
   }
 
-  update(_instance: ErrorBoundaryState, _dynamicScope: Nullable<DynamicScope>): void {}
+  update(instance: ErrorBoundaryState, _dynamicScope: Nullable<DynamicScope>): void {
+    // Consume the @retryWith ref's tag at the ROOT tracking level (outside
+    // the EB component's JumpIfNotModified scope). This ensures the root's
+    // combined tag includes the retryWith value, so root JumpIfNotModified
+    // falls through when @retryWith changes — which in turn allows the EB's
+    // opcodes to run.
+    // The actual reset logic is in ErrorBoundaryOpcode.evaluate().
+    if (instance.retryWithRef) {
+      valueForRef(instance.retryWithRef);
+    }
+  }
 
   didSplatAttributes(
     _instance: ErrorBoundaryState,
