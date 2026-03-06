@@ -32,9 +32,7 @@ function shallowEqual(a: unknown, b: unknown): boolean {
     let keysB = Object.keys(b);
     if (keysA.length !== keysB.length) return false;
     for (let key of keysA) {
-      if (
-        (a as Record<string, unknown>)[key] !== (b as Record<string, unknown>)[key]
-      ) {
+      if ((a as Record<string, unknown>)[key] !== (b as Record<string, unknown>)[key]) {
         return false;
       }
     }

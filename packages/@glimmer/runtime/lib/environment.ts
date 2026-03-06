@@ -113,6 +113,7 @@ class TransactionImpl implements Transaction {
     }
 
     if (firstError !== null) {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
       throw firstError;
     }
   }

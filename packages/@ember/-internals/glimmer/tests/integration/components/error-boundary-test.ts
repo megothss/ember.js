@@ -23,6 +23,26 @@ import { renderComponent, type RenderResult } from '../../../lib/renderer';
 import type Owner from '@ember/owner';
 import { setOwner } from '@ember/-internals/owner';
 
+// --- Tracked state helpers for @retryWith tests ---
+// Declared at module level to avoid TS1206 "Decorators are not valid here"
+// which occurs with decorators inside anonymous class expressions.
+
+class RetryState {
+  @tracked shouldThrow = false;
+  @tracked routeName = 'route-a';
+}
+class RouteOnlyState {
+  @tracked routeName = 'route-a';
+}
+class ArrayRetryState {
+  @tracked shouldThrow = false;
+  @tracked valA = 'a';
+  @tracked valB = 'b';
+}
+class ThrowOnlyState {
+  @tracked shouldThrow = false;
+}
+
 // --- Test helper components ---
 
 const Throwing = defComponent('{{this.boom}}', {
@@ -798,10 +818,7 @@ moduleFor(
     // --- @retryWith tests ---
 
     '@test @retryWith resets error state when value changes'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-        @tracked routeName = 'route-a';
-      })();
+      let state = new RetryState();
 
       let ConditionalThrow = defComponent('{{this.value}}', {
         component: class extends GlimmerishComponent {
@@ -838,10 +855,7 @@ moduleFor(
     }
 
     '@test @retryWith does not reset if value unchanged'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-        @tracked routeName = 'route-a';
-      })();
+      let state = new RetryState();
 
       let ConditionalThrow = defComponent('{{this.value}}', {
         component: class extends GlimmerishComponent {
@@ -875,9 +889,7 @@ moduleFor(
     }
 
     '@test @retryWith re-catches if new value also causes error'() {
-      let state = new (class {
-        @tracked routeName = 'route-a';
-      })();
+      let state = new RouteOnlyState();
 
       // Always throws regardless of route
       let Root = defComponent(
@@ -895,9 +907,7 @@ moduleFor(
     }
 
     '@test @retryWith with retry that still throws re-catches'() {
-      let state = new (class {
-        @tracked routeName = 'route-a';
-      })();
+      let state = new RouteOnlyState();
 
       // Always throws
       let Root = defComponent(
@@ -915,10 +925,7 @@ moduleFor(
     }
 
     '@test @retryWith rerender error then retry without fixing re-catches'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-        @tracked routeName = 'route-a';
-      })();
+      let state = new RetryState();
 
       let ConditionalThrow = defComponent('{{this.value}}', {
         component: class extends GlimmerishComponent {
@@ -952,10 +959,7 @@ moduleFor(
     }
 
     '@test @retryWith with retry after fixing state recovers'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-        @tracked routeName = 'route-a';
-      })();
+      let state = new RetryState();
 
       let ConditionalThrow = defComponent('{{this.value}}', {
         component: class extends GlimmerishComponent {
@@ -1055,11 +1059,7 @@ moduleFor(
     }
 
     '@test @retryWith with array value resets when element changes'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-        @tracked valA = 'a';
-        @tracked valB = 'b';
-      })();
+      let state = new ArrayRetryState();
 
       let ConditionalThrow = defComponent('{{this.value}}', {
         component: class extends GlimmerishComponent {
@@ -1096,11 +1096,7 @@ moduleFor(
     }
 
     '@test @retryWith with array value does not reset if elements unchanged'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-        @tracked valA = 'a';
-        @tracked valB = 'b';
-      })();
+      let state = new ArrayRetryState();
 
       let ConditionalThrow = defComponent('{{this.value}}', {
         component: class extends GlimmerishComponent {
@@ -1134,9 +1130,7 @@ moduleFor(
     }
 
     '@test @retryWith with undefined value works without error'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-      })();
+      let state = new ThrowOnlyState();
 
       // @retryWith is not passed — tests that undefined/missing arg is handled
       let Root = defComponent(
@@ -1154,9 +1148,7 @@ moduleFor(
     }
 
     '@test ErrorBoundary without @retryWith stays in error state'() {
-      let state = new (class {
-        @tracked shouldThrow = false;
-      })();
+      let state = new ThrowOnlyState();
 
       let Root = defComponent(
         '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
