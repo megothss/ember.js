@@ -1,5 +1,4 @@
 import type {
-  Bounds,
   Destroyable,
   DynamicScope,
   Environment,
@@ -13,7 +12,9 @@ import type {
 import type { Reference } from '@glimmer/reference';
 import { setComponentTemplate, setInternalComponentManager } from '@glimmer/manager';
 import { createConstRef, valueForRef } from '@glimmer/reference';
-import { ErrorBoundaryState } from '@glimmer/runtime';
+import { ErrorBoundaryStateImpl } from '@glimmer/runtime';
+
+import type { ErrorBoundaryState } from '@glimmer/runtime';
 
 import ErrorBoundaryTemplate from '../templates/error-boundary';
 
@@ -50,12 +51,11 @@ class ErrorBoundaryManager
     _caller: Nullable<Reference>,
     _hasDefaultBlock: boolean
   ): ErrorBoundaryState {
-    let state = new ErrorBoundaryState();
+    let state = new ErrorBoundaryStateImpl();
 
     if (args && args.named.has('retryWith')) {
       let retryWithRef = args.named.get('retryWith');
-      state.retryWithRef = retryWithRef;
-      state._lastRetryWithValue = valueForRef(retryWithRef);
+      state.initRetryWith(retryWithRef, valueForRef(retryWithRef));
     }
 
     return state;
@@ -85,16 +85,8 @@ class ErrorBoundaryManager
     // falls through when @retryWith changes — which in turn allows the EB's
     // opcodes to run.
     // The actual reset logic is in ErrorBoundaryOpcode.evaluate().
-    if (instance.retryWithRef) {
-      valueForRef(instance.retryWithRef);
-    }
+    instance.consumeRetryWith();
   }
-
-  didSplatAttributes(
-    _instance: ErrorBoundaryState,
-    _element: ErrorBoundaryState,
-    _operations: Bounds
-  ): void {}
 }
 
 const MANAGER = new ErrorBoundaryManager();

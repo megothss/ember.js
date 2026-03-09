@@ -16,14 +16,16 @@ import type {
   UpdatingVM as IUpdatingVM,
 } from '@glimmer/interfaces';
 import type { OpaqueIterationItem, OpaqueIterator, Reference } from '@glimmer/reference';
-import { expect, unwrap } from '@glimmer/debug-util';
+import { expect, unreachable, unwrap } from '@glimmer/debug-util';
 import { associateDestroyableChild, destroy, destroyChildren } from '@glimmer/destroyable';
 import { LOCAL_DEBUG } from '@glimmer/local-debug-flags';
 import { updateRef, valueForRef } from '@glimmer/reference';
 import { logStep, Stack } from '@glimmer/util';
 import { debug, getTrackingDepth, resetTracking, restoreTrackingTo } from '@glimmer/validator';
 
-import type { ErrorBoundaryStateInterface } from '../component/error-boundary';
+import type { SimpleElement } from '@simple-dom/interface';
+
+import type { ErrorBoundaryState } from '../component/error-boundary';
 import type { Closure } from './append';
 import type { AppendingBlockList } from './element-builder';
 
@@ -96,7 +98,7 @@ export class UpdatingVM implements IUpdatingVM {
           let handled = false;
 
           while (!frameStack.isEmpty()) {
-            if (this.frame.handleError(error)) {
+            if (this.frame.handleCaughtError(error)) {
               this._popFrame();
               handled = true;
               break;
@@ -193,6 +195,10 @@ export class TryOpcode extends BlockOpcode implements ExceptionHandler {
     vm.try(this.children, this);
   }
 
+  handleCaughtError(_error: unknown) {
+    unreachable('handleCaughtError called on TryOpcode');
+  }
+
   handleException() {
     let {
       state,
@@ -222,6 +228,23 @@ export class TryOpcode extends BlockOpcode implements ExceptionHandler {
   }
 }
 
+/**
+ * Remove all DOM nodes from `from` up to (but not including) `to`.
+ * If `to` is null, removes all remaining siblings after `from`.
+ */
+export function clearDOMRange(
+  parent: SimpleElement,
+  from: SimpleNode | null,
+  to: SimpleNode | null
+): void {
+  let current = from;
+  while (current && current !== to) {
+    let next: SimpleNode | null = current.nextSibling;
+    parent.removeChild(current);
+    current = next;
+  }
+}
+
 export class ErrorBoundaryOpcode extends TryOpcode {
   public type = 'error-boundary';
 
@@ -231,20 +254,20 @@ export class ErrorBoundaryOpcode extends TryOpcode {
   // the last node, so that cleanup removes everything from firstNode up to
   // (but not including) nextSibling — including any dynamically inserted nodes
   // like list markers. The previousSibling is needed because inner TryOpcodes
-  // may detach lastFirstNode from the DOM via bounds.reset() before the error
+  // may detach cachedFirstNode from the DOM via bounds.reset() before the error
   // reaches us.
-  private lastFirstNode: SimpleNode | null = null;
-  private lastPreviousSibling: SimpleNode | null = null;
-  private lastNextSibling: SimpleNode | null = null;
-  private lastRenderTreeDepth = 0;
-  private lastTrackingDepth = 0;
+  private cachedFirstNode: SimpleNode | null = null;
+  private cachedPreviousSibling: SimpleNode | null = null;
+  private cachedNextSibling: SimpleNode | null = null;
+  private cachedRenderTreeDepth = 0;
+  private cachedTrackingDepth = 0;
 
   constructor(
     state: Closure,
     context: EvaluationContext,
     bounds: ResettableBlock,
     children: UpdatingOpcode[],
-    private errorState: ErrorBoundaryStateInterface
+    private errorState: ErrorBoundaryState
   ) {
     super(state, context, bounds, children);
   }
@@ -257,11 +280,11 @@ export class ErrorBoundaryOpcode extends TryOpcode {
         'BUG: ErrorBoundaryOpcode.evaluate() called with uninitialized bounds'
       );
     }
-    this.lastFirstNode = this.bounds.firstNode();
-    this.lastPreviousSibling = this.lastFirstNode.previousSibling;
-    this.lastNextSibling = this.bounds.lastNode().nextSibling;
-    this.lastRenderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
-    this.lastTrackingDepth = getTrackingDepth();
+    this.cachedFirstNode = this.bounds.firstNode();
+    this.cachedPreviousSibling = this.cachedFirstNode.previousSibling;
+    this.cachedNextSibling = this.bounds.lastNode().nextSibling;
+    this.cachedRenderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
+    this.cachedTrackingDepth = getTrackingDepth();
 
     // Always consume hasError so its tag is captured in the EB's tracking
     // frame. Without this, after error recovery the EB's JumpIfNotModified
@@ -280,6 +303,68 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     vm.tryErrorBoundary(this.children, this);
   }
 
+  /**
+   * Restore tracking frames and consumed tags to the state captured in
+   * evaluate(), before children ran. This prevents stale tracking frames
+   * (opened by BeginTrackFrameOpcode but never closed) from leaking into
+   * OPEN_TRACK_FRAMES / TRANSACTION_STACK, which would cause spurious
+   * backtracking assertions on later mutations.
+   */
+  private restoreTracking() {
+    restoreTrackingTo(this.cachedTrackingDepth);
+    if (DEBUG) {
+      debug.resetConsumedTags?.();
+    }
+  }
+
+  /**
+   * Resolve the start node for DOM cleanup. Handles the case where
+   * cachedFirstNode may have been detached by an inner TryOpcode's
+   * bounds.reset(), falling back to the cached previousSibling or
+   * the parent's firstChild.
+   */
+  private resolveCachedStart(parent: SimpleElement): SimpleNode | null {
+    if (this.cachedFirstNode!.parentNode === parent) {
+      return this.cachedFirstNode;
+    } else if (this.cachedPreviousSibling) {
+      return this.cachedPreviousSibling.nextSibling;
+    } else {
+      return parent.firstChild;
+    }
+  }
+
+  /**
+   * Re-render the boundary's template into its block. Used by both the
+   * happy-path re-render (handleException) and error-state transitions
+   * (handleCaughtError). Assumes the block has already been cleaned up
+   * (destroyChildren + DOM cleared + resetPartial).
+   */
+  private renderIntoBlock(): void {
+    let {
+      bounds,
+      context: { env },
+    } = this;
+    let tree = NewTreeBuilder.beginBlock(env, bounds, this.cachedNextSibling);
+    let vm = this.state.evaluate(tree);
+    let children = (this.children = []);
+    let result = vm.executeGuarded((vm) => {
+      vm.updateWith(this);
+      vm.pushUpdating(children);
+    });
+    associateDestroyableChild(this, result.drop);
+  }
+
+  /**
+   * Null out cached DOM references after an error transition. The cached
+   * nodes pointed at pre-error content which has been removed; fresh
+   * values are captured in the next evaluate().
+   */
+  private clearCachedNodes(): void {
+    this.cachedFirstNode = null;
+    this.cachedPreviousSibling = null;
+    this.cachedNextSibling = null;
+  }
+
   override handleException() {
     let {
       bounds,
@@ -287,23 +372,8 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     } = this;
     let parent = bounds.parentElement();
 
-    // Restore tracking to the depth captured in evaluate(), BEFORE children
-    // ran. When vm.throw() is called (e.g. by an Assert opcode), it
-    // short-circuits the children's frame — any tracking frames opened by
-    // BeginTrackFrameOpcode will never see their matching EndTrackFrameOpcode.
-    // Without this, stale frames (and their DEBUG tracking transactions) leak
-    // onto OPEN_TRACK_FRAMES / TRANSACTION_STACK, keeping CONSUMED_TAGS alive
-    // and causing spurious backtracking assertions on later mutations.
-    restoreTrackingTo(this.lastTrackingDepth);
-    // Discard consumed-tag entries from the popped tracking frames. The
-    // CONSUMED_TAGS WeakMap can't be selectively pruned, so replace it
-    // with a fresh one. Without this, stale entries (e.g. a @tracked
-    // property consumed during the failed render) cause backtracking
-    // assertions when the property is later mutated outside the render.
-    if (DEBUG) {
-      debug.resetConsumedTags?.();
-    }
-    let trackingDepth = this.lastTrackingDepth;
+    this.restoreTracking();
+    let trackingDepth = this.cachedTrackingDepth;
 
     destroyChildren(this);
 
@@ -313,53 +383,27 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // can become stale when inner TryOpcodes or ListBlockOpcodes modify
     // their blocks during the same update cycle, leading to crashes or
     // incomplete DOM cleanup. Using concrete cached references avoids this.
-    if (this.lastFirstNode) {
-      let current: SimpleNode | null;
-      if (this.lastFirstNode.parentNode === parent) {
-        current = this.lastFirstNode;
-      } else if (this.lastPreviousSibling) {
-        current = this.lastPreviousSibling.nextSibling;
-      } else {
-        current = parent.firstChild;
-      }
-      let stop = this.lastNextSibling;
-      while (current && current !== stop) {
-        let next: SimpleNode | null = current.nextSibling;
-        parent.removeChild(current);
-        current = next;
-      }
+    if (this.cachedFirstNode) {
+      clearDOMRange(parent, this.resolveCachedStart(parent), this.cachedNextSibling);
     }
 
     // Reset block state without DOM cleanup (already done above).
     bounds.resetPartial();
 
     try {
-      // Re-render using beginBlock (not resume, which would call reset/clear).
-      let tree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
-      let vm = this.state.evaluate(tree);
-      let children = (this.children = []);
-      let result = vm.executeGuarded((vm) => {
-        vm.updateWith(this);
-        vm.pushUpdating(children);
-      });
-      associateDestroyableChild(this, result.drop);
+      this.renderIntoBlock();
     } catch (error) {
       // Restore tracking frames opened by the failed re-render attempt.
       restoreTrackingTo(trackingDepth);
 
       // Roll back stale debug render tree entries.
-      env.debugRenderTree?.rollbackTo(this.lastRenderTreeDepth);
+      env.debugRenderTree?.rollbackTo(this.cachedRenderTreeDepth);
 
       // Remove partial DOM nodes left by the failed re-render.
-      let cursor: SimpleNode | null = this.lastPreviousSibling
-        ? this.lastPreviousSibling.nextSibling
+      let start: SimpleNode | null = this.cachedPreviousSibling
+        ? this.cachedPreviousSibling.nextSibling
         : parent.firstChild;
-      let stop = this.lastNextSibling;
-      while (cursor && cursor !== stop) {
-        let next: SimpleNode | null = cursor.nextSibling;
-        parent.removeChild(cursor);
-        cursor = next;
-      }
+      clearDOMRange(parent, start, this.cachedNextSibling);
 
       bounds.resetPartial();
 
@@ -369,18 +413,8 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       }
       this.errorState.setError(error);
 
-      let retryTree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
-      let retryVM = this.state.evaluate(retryTree);
-      let children = (this.children = []);
-      let result = retryVM.executeGuarded((vm) => {
-        vm.updateWith(this);
-        vm.pushUpdating(children);
-      });
-      associateDestroyableChild(this, result.drop);
-
-      this.lastFirstNode = null;
-      this.lastPreviousSibling = null;
-      this.lastNextSibling = null;
+      this.renderIntoBlock();
+      this.clearCachedNodes();
     }
   }
 
@@ -389,23 +423,13 @@ export class ErrorBoundaryOpcode extends TryOpcode {
    * Called directly by the UpdatingVM when a JS exception occurs,
    * skipping inner TryOpcode handlers that would corrupt block state.
    */
-  handleError(error: unknown) {
-    // Restore tracking to the depth from evaluate(), before children ran.
-    // _execute's catch only restores to the depth of the failing opcode,
-    // which doesn't cover tracking frames opened by earlier opcodes
-    // (like BeginTrackFrameOpcode) in the children's frame.
-    restoreTrackingTo(this.lastTrackingDepth);
-    if (DEBUG) {
-      debug.resetConsumedTags?.();
-    }
-    this.transitionToError(error);
-  }
-
-  private transitionToError(error: unknown) {
+  handleCaughtError(error: unknown) {
     let {
       bounds,
       context: { env },
     } = this;
+
+    this.restoreTracking();
 
     destroyChildren(this);
 
@@ -423,51 +447,18 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // handles both cases.
     let parent = bounds.parentElement();
 
-    if (this.lastFirstNode) {
-      // Determine cleanup start: if lastFirstNode is still in the DOM, start
-      // there. If it was detached (by an inner TryOpcode's bounds.reset()),
-      // use the cached previousSibling to find the current start point.
-      let current: SimpleNode | null;
-      if (this.lastFirstNode.parentNode === parent) {
-        current = this.lastFirstNode;
-      } else if (this.lastPreviousSibling) {
-        current = this.lastPreviousSibling.nextSibling;
-      } else {
-        current = parent.firstChild;
-      }
-      let stop = this.lastNextSibling;
-
-      while (current && current !== stop) {
-        let next: SimpleNode | null = current.nextSibling;
-        parent.removeChild(current);
-        current = next;
-      }
+    if (this.cachedFirstNode) {
+      clearDOMRange(parent, this.resolveCachedStart(parent), this.cachedNextSibling);
     }
 
     // Roll back the debug render tree stack to discard stale entries left by
     // DebugRenderTreeUpdateOpcodes that pushed but never got their matching
     // DebugRenderTreeDidRenderOpcode pop due to the error.
-    env.debugRenderTree?.rollbackTo(this.lastRenderTreeDepth);
+    env.debugRenderTree?.rollbackTo(this.cachedRenderTreeDepth);
 
     bounds.resetPartial();
-    let tree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
-
-    let vm = this.state.evaluate(tree);
-
-    let children = (this.children = []);
-
-    let result = vm.executeGuarded((vm) => {
-      vm.updateWith(this);
-      vm.pushUpdating(children);
-    });
-
-    associateDestroyableChild(this, result.drop);
-
-    // Clear cached DOM references — they pointed at the pre-error content
-    // which has been removed. Fresh values are captured in the next evaluate().
-    this.lastFirstNode = null;
-    this.lastPreviousSibling = null;
-    this.lastNextSibling = null;
+    this.renderIntoBlock();
+    this.clearCachedNodes();
   }
 }
 
@@ -748,9 +739,9 @@ class UpdatingVMFrame {
    * Returns true if the handler accepted the error, false otherwise.
    * Only error boundary handlers accept JavaScript errors.
    */
-  handleError(error: unknown): boolean {
-    if (this.exceptionHandler?.handleError) {
-      this.exceptionHandler.handleError(error);
+  handleCaughtError(error: unknown): boolean {
+    if (this.isErrorBoundary && this.exceptionHandler) {
+      this.exceptionHandler.handleCaughtError(error);
       return true;
     }
     return false;

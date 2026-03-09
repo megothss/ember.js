@@ -548,6 +548,11 @@ export class ResettableBlockImpl extends AppendingBlockImpl implements Resettabl
    * Reset the block's internal tracking state without touching the DOM.
    * Used during error boundary recovery when the DOM has already been
    * cleaned up manually (because child bounds may be partially initialized).
+   *
+   * Note: destroy(this) marks the block as destroyed and runs child
+   * destructors, but the block itself is then reused for DOM position
+   * tracking only. New destroyable children are associated with the
+   * ErrorBoundaryOpcode, not this block, so the destroyed state is safe.
    */
   resetPartial(): void {
     destroy(this);

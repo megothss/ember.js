@@ -3,11 +3,13 @@ import type { UpdatableTag } from '@glimmer/validator';
 import { valueForRef } from '@glimmer/reference';
 import { consumeTag, dirtyTag, dirtyTagFor, tagFor } from '@glimmer/validator';
 
-export interface ErrorBoundaryStateInterface {
+export interface ErrorBoundaryState {
   error: unknown;
   hasError: boolean;
   setError(error: unknown): void;
   retry(): void;
+  initRetryWith(ref: Reference, initialValue: unknown): void;
+  consumeRetryWith(): void;
   checkRetryWith(): boolean;
 }
 
@@ -17,6 +19,8 @@ export interface ErrorBoundaryStateInterface {
  */
 function shallowEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
+  // After the === check above, at most one side is null/undefined.
+  // Treat null and undefined as distinct (null !== undefined).
   if (a == null || b == null) return false;
 
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -52,14 +56,14 @@ function snapshot(value: unknown): unknown {
   return value;
 }
 
-export class ErrorBoundaryState implements ErrorBoundaryStateInterface {
+export class ErrorBoundaryStateImpl implements ErrorBoundaryState {
   private _error: unknown = null;
   private _hasError = false;
 
   // @retryWith support: tracks a reference whose value, when changed,
   // automatically clears the error state and retries the default block.
-  retryWithRef: Reference | null = null;
-  _lastRetryWithValue: unknown = undefined;
+  private retryWithRef: Reference | null = null;
+  private lastRetryWithValue: unknown = undefined;
 
   get error(): unknown {
     consumeTag(tagFor(this, '_error'));
@@ -89,6 +93,17 @@ export class ErrorBoundaryState implements ErrorBoundaryStateInterface {
     dirtyTagFor(this, '_hasError');
   };
 
+  initRetryWith(ref: Reference, initialValue: unknown) {
+    this.retryWithRef = ref;
+    this.lastRetryWithValue = snapshot(initialValue);
+  }
+
+  consumeRetryWith() {
+    if (this.retryWithRef) {
+      valueForRef(this.retryWithRef);
+    }
+  }
+
   /**
    * Check if the @retryWith value has changed. If it has and the boundary
    * is in error state, clear the error state and return true so the caller
@@ -103,8 +118,8 @@ export class ErrorBoundaryState implements ErrorBoundaryStateInterface {
 
     let current = valueForRef(this.retryWithRef);
 
-    if (!shallowEqual(current, this._lastRetryWithValue)) {
-      this._lastRetryWithValue = snapshot(current);
+    if (!shallowEqual(current, this.lastRetryWithValue)) {
+      this.lastRetryWithValue = snapshot(current);
 
       if (this._hasError) {
         this._error = null;

@@ -82,10 +82,10 @@ import type { BlockArgumentsImpl } from '../../vm/arguments';
 import { getTrackingDepth, restoreTrackingTo } from '@glimmer/validator';
 
 import { NewTreeBuilder } from '../../vm/element-builder';
-import { ErrorBoundaryOpcode } from '../../vm/update';
+import { clearDOMRange, ErrorBoundaryOpcode } from '../../vm/update';
 
 import { ConcreteBounds } from '../../bounds';
-import type { ErrorBoundaryStateInterface } from '../../component/error-boundary';
+import type { ErrorBoundaryState } from '../../component/error-boundary';
 import { hasCustomDebugRenderTreeLifecycle } from '../../component/interfaces';
 import { resolveComponent } from '../../component/resolve';
 import { isCurriedType, isCurriedValue, resolveCurriedValue } from '../../curried-value';
@@ -886,7 +886,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_OP, (vm, { op1: register }) => {
 // On error during initial render, cleans up partial DOM and re-renders with error state.
 APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }) => {
   let state = check(vm.fetchValue(check(register, CheckRegister)), CheckFinishedComponentInstance);
-  let errorState = state.state as ErrorBoundaryStateInterface;
+  let errorState = state.state as ErrorBoundaryState;
 
   // Capture current scope (which has self, named args, blocks all set up)
   // Use the layout handle's resolved address as the closure PC so the sub-VM
@@ -944,12 +944,11 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
 
     // Remove any partial DOM nodes inserted during the failed render.
     // We can't use clear(block) because child bounds may be partially initialized.
-    let cursor = insertionMarker ? insertionMarker.nextSibling : parent.firstChild;
-    while (cursor) {
-      let next = cursor.nextSibling;
-      parent.removeChild(cursor);
-      cursor = next;
-    }
+    // null end marker is safe here: during initial render, no sibling content
+    // has been rendered after this component yet, so removing from start to
+    // the end of the parent won't affect other nodes.
+    let start = insertionMarker ? insertionMarker.nextSibling : parent.firstChild;
+    clearDOMRange(parent, start, null);
 
     // Reset block to empty state for the retry render.
     block.resetPartial();
