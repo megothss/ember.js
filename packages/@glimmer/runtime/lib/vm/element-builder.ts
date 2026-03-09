@@ -541,7 +541,6 @@ export class ResettableBlockImpl extends AppendingBlockImpl implements Resettabl
     this.first = null;
     this.last = null;
     this.nesting = 0;
-
     return nextSibling;
   }
 

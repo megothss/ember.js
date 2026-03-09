@@ -291,20 +291,37 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     }
     let trackingDepth = this.lastTrackingDepth;
 
-    // Save insertion marker: the sibling just before the boundary's content.
-    // After resume() removes old DOM via bounds.reset(), any nodes between
-    // this marker and lastNextSibling are partial leftovers from a failed render.
-    let insertionMarker = this.lastFirstNode ? this.lastFirstNode.previousSibling : null;
-
     destroyChildren(this);
 
+    // Clear DOM directly using cached node references instead of
+    // NewTreeBuilder.resume() (which walks the bounds delegation chain).
+    // The delegation chain — block.firstNode() → child.firstNode() → ... —
+    // can become stale when inner TryOpcodes or ListBlockOpcodes modify
+    // their blocks during the same update cycle, leading to crashes or
+    // incomplete DOM cleanup. Using concrete cached references avoids this.
+    if (this.lastFirstNode) {
+      let current: SimpleNode | null;
+      if (this.lastFirstNode.parentNode === parent) {
+        current = this.lastFirstNode;
+      } else if (this.lastPreviousSibling) {
+        current = this.lastPreviousSibling.nextSibling;
+      } else {
+        current = parent.firstChild;
+      }
+      let stop = this.lastNextSibling;
+      while (current && current !== stop) {
+        let next: SimpleNode | null = current.nextSibling;
+        parent.removeChild(current);
+        current = next;
+      }
+    }
+
+    // Reset block state without DOM cleanup (already done above).
+    bounds.resetPartial();
+
     try {
-      // Attempt a normal re-render like TryOpcode.handleException(), but use
-      // executeGuarded() instead of execute(). In DEBUG mode, execute() calls
-      // resetTracking() on error, which wipes out the parent UpdatingVM's
-      // tracking transaction (TRANSACTION_STACK / CONSUMED_TAGS), causing
-      // spurious backtracking assertions on later tracked property mutations.
-      let tree = NewTreeBuilder.resume(env, bounds);
+      // Re-render using beginBlock (not resume, which would call reset/clear).
+      let tree = NewTreeBuilder.beginBlock(env, bounds, this.lastNextSibling);
       let vm = this.state.evaluate(tree);
       let children = (this.children = []);
       let result = vm.executeGuarded((vm) => {
@@ -320,10 +337,8 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       env.debugRenderTree?.rollbackTo(this.lastRenderTreeDepth);
 
       // Remove partial DOM nodes left by the failed re-render.
-      // resume() already removed old content via bounds.reset(), so any nodes
-      // between insertionMarker and lastNextSibling are from the failed render.
-      let cursor: SimpleNode | null = insertionMarker
-        ? insertionMarker.nextSibling
+      let cursor: SimpleNode | null = this.lastPreviousSibling
+        ? this.lastPreviousSibling.nextSibling
         : parent.firstChild;
       let stop = this.lastNextSibling;
       while (cursor && cursor !== stop) {

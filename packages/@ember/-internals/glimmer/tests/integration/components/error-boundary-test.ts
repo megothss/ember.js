@@ -42,6 +42,15 @@ class ArrayRetryState {
 class ThrowOnlyState {
   @tracked shouldThrow = false;
 }
+class SiblingState {
+  @tracked label = 'before';
+}
+class ConditionalState {
+  @tracked show = true;
+}
+class InnerState {
+  @tracked value = 'hello';
+}
 
 // --- Test helper components ---
 
@@ -1165,6 +1174,150 @@ moduleFor(
       this.assertChange({
         change: () => (state.shouldThrow = false),
         expect: 'caught',
+      });
+    }
+
+    '@test sibling content after ErrorBoundary updates correctly'() {
+      let state = new SiblingState();
+
+      let Sibling = defComponent('{{state.label}}', { scope: { state } });
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary><Sibling />',
+        { scope: { ErrorBoundary, Sibling } }
+      );
+
+      this.renderComponent(Root, { expect: 'contentbefore' });
+
+      // Changing tracked state on sibling should not crash.
+      // Without the block stack fix, the ErrorBoundary's orphaned AppendingBlock
+      // corrupts the sibling's bounds, causing a crash in clear() during re-render.
+      this.assertChange({
+        change: () => (state.label = 'after'),
+        expect: 'contentafter',
+      });
+    }
+
+    '@test component inside ErrorBoundary re-renders with sibling content after'() {
+      let state = new InnerState();
+      let siblingState = new SiblingState();
+      let Inner = defComponent('{{state.value}}', { scope: { state } });
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary><span>{{siblingState.label}}</span>',
+        { scope: { ErrorBoundary, Inner, siblingState } }
+      );
+
+      this.renderComponent(Root, { expect: 'hello<span>before</span>' });
+
+      // Re-render inside EB content — without the cursor fix, this inverts
+      // the parent block's bounds (firstNode after lastNode in DOM order).
+      this.assertChange({
+        change: () => (state.value = 'world'),
+        expect: 'world<span>before</span>',
+      });
+
+      // Re-render sibling — verifies bounds are correct after EB content changed.
+      this.assertChange({
+        change: () => (siblingState.label = 'after'),
+        expect: 'world<span>after</span>',
+      });
+    }
+
+    '@test tracked state inside ErrorBoundary content updates'() {
+      let state = new InnerState();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+
+      this.assertChange({
+        change: () => (state.value = 'world'),
+        expect: 'world',
+      });
+    }
+
+    '@test ErrorBoundary inside conditional that toggles'() {
+      let state = new ConditionalState();
+
+      let Root = defComponent(
+        '{{#if state.show}}<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary>{{/if}}',
+        { scope: { ErrorBoundary, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'content' });
+
+      this.assertChange({
+        change: () => (state.show = false),
+        expect: '<!---->',
+      });
+
+      this.assertChange({
+        change: () => (state.show = true),
+        expect: 'content',
+      });
+    }
+
+    '@test ErrorBoundary and sibling in conditional block re-render'() {
+      let state = new SiblingState();
+      let cond = new ConditionalState();
+
+      let Root = defComponent(
+        '{{#if cond.show}}<ErrorBoundary><:default>eb</:default><:error as |err|>caught</:error></ErrorBoundary>{{state.label}}{{/if}}',
+        { scope: { ErrorBoundary, state, cond } }
+      );
+
+      this.renderComponent(Root, { expect: 'ebbefore' });
+
+      this.assertChange({
+        change: () => (state.label = 'after'),
+        expect: 'ebafter',
+      });
+    }
+
+    '@test ErrorBoundary wrapping component with tracked state'() {
+      let state = new InnerState();
+      let Inner = defComponent('{{state.value}}', { scope: { state } });
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, Inner } }
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+
+      this.assertChange({
+        change: () => (state.value = 'world'),
+        expect: 'world',
+      });
+    }
+
+    '@test multiple re-renders of ErrorBoundary content'() {
+      let state = new InnerState();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, state } }
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+
+      this.assertChange({
+        change: () => (state.value = 'one'),
+        expect: 'one',
+      });
+
+      this.assertChange({
+        change: () => (state.value = 'two'),
+        expect: 'two',
+      });
+
+      this.assertChange({
+        change: () => (state.value = 'three'),
+        expect: 'three',
       });
     }
   }

@@ -893,6 +893,13 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
   // starts executing from the layout code directly.
   let layoutAddr = vm.context.program.heap.getaddr(state.handle);
   let closure = vm.capture(0, layoutAddr);
+
+  // Save the parent tree builder's cursor BEFORE pushing the block, so the
+  // sub-VM inserts content at the same position the parent VM would. Without
+  // this, beginBlock defaults to nextSibling=null, appending at the end of the
+  // parent element — which inverts the bounds when sibling content follows.
+  let parentNextSibling = vm.tree().nextSibling;
+
   let block = vm.tree().pushResettableBlock();
 
   // Record insertion point so we can clean up partial DOM on error.
@@ -907,7 +914,8 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
 
   try {
     // Use beginBlock (not resume) since this is a fresh block with no prior content.
-    let subTree = NewTreeBuilder.beginBlock(vm.env, block);
+    // Pass parentNextSibling so content is inserted at the correct cursor position.
+    let subTree = NewTreeBuilder.beginBlock(vm.env, block, parentNextSibling);
     let subVM = closure.evaluate(subTree);
 
     let children: UpdatingOpcode[] = [];
@@ -950,7 +958,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     errorState.setError(error);
 
     // Re-execute layout with error state (will render the error block).
-    let retryTree = NewTreeBuilder.beginBlock(vm.env, block);
+    let retryTree = NewTreeBuilder.beginBlock(vm.env, block, parentNextSibling);
     let retryVM = closure.evaluate(retryTree);
 
     let children: UpdatingOpcode[] = [];
@@ -965,6 +973,14 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     vm.associateDestroyable(errorBoundaryOp);
     vm.updateWith(errorBoundaryOp);
   }
+
+  // Pop the ResettableBlock from the parent tree builder. It was pushed for
+  // the sub-VM's use, but the sub-VM has its own tree builder. Without this
+  // pop, VM_DID_RENDER_LAYOUT_OP pops the ResettableBlock instead of the
+  // AppendingBlock from VM_BEGIN_COMPONENT_TRANSACTION_OP, leaving the
+  // AppendingBlock orphaned on the stack and corrupting bounds for all
+  // subsequent sibling content.
+  vm.tree().popBlock();
 });
 
 APPEND_OPCODES.add(VM_DID_RENDER_LAYOUT_OP, (vm, { op1: register }) => {
