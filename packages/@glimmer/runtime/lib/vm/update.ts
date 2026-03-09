@@ -36,6 +36,7 @@ export class UpdatingVM implements IUpdatingVM {
   public alwaysRevalidate: boolean;
 
   private frameStack: Stack<UpdatingVMFrame> = new Stack<UpdatingVMFrame>();
+  private _errorBoundaryDepth = 0;
 
   constructor(env: Environment, { alwaysRevalidate = false }) {
     this.env = env;
@@ -76,41 +77,49 @@ export class UpdatingVM implements IUpdatingVM {
       let opcode = this.frame.nextStatement();
 
       if (opcode === undefined) {
-        frameStack.pop();
+        this._popFrame();
         continue;
       }
 
-      // Save tracking frame depth so we can discard stale frames if the
-      // opcode throws a JS exception (e.g., a tracked getter throwing).
-      let trackingDepth = getTrackingDepth();
+      if (this._errorBoundaryDepth > 0) {
+        // Only pay the try-catch cost when inside an error boundary.
+        let trackingDepth = getTrackingDepth();
 
-      try {
-        opcode.evaluate(this);
-      } catch (error) {
-        // Restore tracking frames to the depth before the failed opcode.
-        // Without this, stale frames corrupt the parent's tracking context.
-        restoreTrackingTo(trackingDepth);
+        try {
+          opcode.evaluate(this);
+        } catch (error) {
+          // Restore tracking frames to the depth before the failed opcode.
+          restoreTrackingTo(trackingDepth);
 
-        // Walk up the frame stack to find an error boundary that can handle
-        // JavaScript errors. We skip regular TryOpcode handlers because they
-        // would reset their block and re-render, which corrupts parent block
-        // references if the re-render also fails.
-        let handled = false;
+          // Walk up the frame stack to find an error boundary that can handle
+          // JavaScript errors.
+          let handled = false;
 
-        while (!frameStack.isEmpty()) {
-          if (this.frame.handleError(error)) {
-            frameStack.pop();
-            handled = true;
-            break;
+          while (!frameStack.isEmpty()) {
+            if (this.frame.handleError(error)) {
+              this._popFrame();
+              handled = true;
+              break;
+            }
+            this._popFrame();
           }
-          frameStack.pop();
-        }
 
-        if (!handled) {
-          throw error;
+          if (!handled) {
+            throw error;
+          }
         }
+      } else {
+        opcode.evaluate(this);
       }
     }
+  }
+
+  private _popFrame() {
+    let frame = this.frameStack.current;
+    if (frame && frame.isErrorBoundary) {
+      this._errorBoundaryDepth--;
+    }
+    this.frameStack.pop();
   }
 
   private get frame() {
@@ -125,9 +134,14 @@ export class UpdatingVM implements IUpdatingVM {
     this.frameStack.push(new UpdatingVMFrame(ops, handler));
   }
 
+  tryErrorBoundary(ops: UpdatingOpcode[], handler: ExceptionHandler) {
+    this._errorBoundaryDepth++;
+    this.frameStack.push(new UpdatingVMFrame(ops, handler, true));
+  }
+
   throw() {
     this.frame.handleException();
-    this.frameStack.pop();
+    this._popFrame();
   }
 }
 
@@ -263,7 +277,7 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       return;
     }
 
-    vm.try(this.children, this);
+    vm.tryErrorBoundary(this.children, this);
   }
 
   override handleException() {
@@ -646,7 +660,7 @@ export class ListBlockOpcode extends BlockOpcode {
 
     let vm = state.evaluate(elementStack);
 
-    vm.executeGuarded((vm) => {
+    vm.execute((vm) => {
       let opcode = vm.enterItem(item);
 
       opcode.index = children.length;
@@ -711,7 +725,8 @@ class UpdatingVMFrame {
 
   constructor(
     private ops: UpdatingOpcode[],
-    private exceptionHandler: Nullable<ExceptionHandler>
+    private exceptionHandler: Nullable<ExceptionHandler>,
+    readonly isErrorBoundary = false
   ) {}
 
   goto(index: number) {
