@@ -1311,7 +1311,11 @@ moduleFor(
       this.renderComponent(Root, { expect: 'caught' });
 
       // Remote element should be completely empty — no DOM nodes at all.
-      this.assert.strictEqual(remote.innerHTML, '', 'remote element should be completely empty after error');
+      this.assert.strictEqual(
+        remote.innerHTML,
+        '',
+        'remote element should be completely empty after error'
+      );
     }
 
     '@test catches rerender error and cleans up {{#in-element}} remote DOM'() {
@@ -1339,7 +1343,11 @@ moduleFor(
       });
 
       // Remote element should be completely empty — no DOM nodes at all.
-      this.assert.strictEqual(remote.innerHTML, '', 'remote element should be completely empty after error');
+      this.assert.strictEqual(
+        remote.innerHTML,
+        '',
+        'remote element should be completely empty after error'
+      );
     }
 
     '@test multiple re-renders of ErrorBoundary content'() {

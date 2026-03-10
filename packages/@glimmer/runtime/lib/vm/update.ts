@@ -324,7 +324,7 @@ export class ErrorBoundaryOpcode extends TryOpcode {
    * the parent's firstChild.
    */
   private resolveCachedStart(parent: SimpleElement): SimpleNode | null {
-    if (this.cachedFirstNode!.parentNode === parent) {
+    if (this.cachedFirstNode && this.cachedFirstNode.parentNode === parent) {
       return this.cachedFirstNode;
     } else if (this.cachedPreviousSibling) {
       return this.cachedPreviousSibling.nextSibling;
@@ -651,7 +651,7 @@ export class ListBlockOpcode extends BlockOpcode {
 
     let vm = state.evaluate(elementStack);
 
-    vm.execute((vm) => {
+    vm.executeGuarded((vm) => {
       let opcode = vm.enterItem(item);
 
       opcode.index = children.length;

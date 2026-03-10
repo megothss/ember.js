@@ -17,10 +17,7 @@ export {
   templateOnlyComponent,
   TemplateOnlyComponentManager,
 } from './lib/component/template-only';
-export {
-  ErrorBoundaryStateImpl,
-  type ErrorBoundaryState,
-} from './lib/component/error-boundary';
+export { ErrorBoundaryStateImpl, type ErrorBoundaryState } from './lib/component/error-boundary';
 export { CurriedValue, curry } from './lib/curried-value';
 export {
   DOMChanges,
