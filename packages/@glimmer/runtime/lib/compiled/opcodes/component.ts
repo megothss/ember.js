@@ -921,8 +921,9 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     let children: UpdatingOpcode[] = [];
     let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
 
-    // Use executeGuarded to avoid resetting the parent VM's tracking state.
-    let result = subVM.executeGuarded((subVM) => {
+    // Use executeErrorBoundary to avoid resetting the parent VM's tracking
+    // state and to clean up remote blocks on error.
+    let result = subVM.executeErrorBoundary((subVM) => {
       subVM.updateWith(errorBoundaryOp);
       subVM.pushUpdating(children);
     });
@@ -963,7 +964,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     let children: UpdatingOpcode[] = [];
     let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
 
-    let result = retryVM.executeGuarded((retryVM) => {
+    let result = retryVM.executeErrorBoundary((retryVM) => {
       retryVM.updateWith(errorBoundaryOp);
       retryVM.pushUpdating(children);
     });

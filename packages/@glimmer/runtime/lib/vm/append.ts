@@ -729,7 +729,29 @@ export class VM {
    * which would destroy the parent VM's tracking state. It only cleans up
    * open blocks on error before re-throwing.
    */
+  /**
+   * Execute the VM without resetting the parent's tracking state on error.
+   * Used by TryOpcode re-renders — popBlock/finalize inserts placeholder
+   * comments (<!---->), which is correct for conditional blocks.
+   */
   executeGuarded(initialize?: (vm: this) => void): RenderResult {
+    try {
+      return this._execute(initialize);
+    } catch (e) {
+      let elements = this.tree();
+      while (elements.hasBlocks) {
+        elements.popBlock();
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Execute the VM for an ErrorBoundary sub-VM. Unlike executeGuarded, this
+   * drops blocks without finalize (the DOM is discarded by the error boundary)
+   * and destroys the sub-VM's destroyable root to clean up RemoteBlocks.
+   */
+  executeErrorBoundary(initialize?: (vm: this) => void): RenderResult {
     try {
       return this._execute(initialize);
     } catch (e) {
@@ -737,9 +759,7 @@ export class VM {
       // comments, but the DOM is being discarded by the error boundary anyway.
       this.tree().dropBlocks();
       // Destroy the sub-VM's destroyable root to clean up any associated
-      // resources (e.g. RemoteBlocks from {{#in-element}}). Without this,
-      // remote DOM content would leak when the error boundary catches the
-      // error and re-renders with error state.
+      // resources (e.g. RemoteBlocks from {{#in-element}}).
       destroy(this.#stacks.drop);
       throw e;
     }
