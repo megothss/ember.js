@@ -112,6 +112,7 @@ export interface TreeBuilder extends Cursor, DOMStack, TreeOperations {
   pushResettableBlock(): ResettableBlock;
   pushBlockList(list: Bounds[]): AppendingBlock;
   popBlock(): AppendingBlock;
+  dropBlocks(): void;
 
   didAppendBounds(bounds: Bounds): void;
 }

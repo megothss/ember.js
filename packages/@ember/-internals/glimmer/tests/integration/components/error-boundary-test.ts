@@ -1295,6 +1295,53 @@ moduleFor(
       });
     }
 
+    '@test catches error inside {{#in-element}} during initial render and cleans up remote DOM'() {
+      let fixture = document.querySelector('#qunit-fixture')!;
+      let remote = document.createElement('div');
+      remote.id = 'eb-remote-target-1';
+      fixture.appendChild(remote);
+
+      let getRemote = defineSimpleHelper(() => remote);
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<Throwing/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, Throwing, getRemote } }
+      );
+
+      this.renderComponent(Root, { expect: 'caught' });
+
+      // Remote element should be completely empty — no DOM nodes at all.
+      this.assert.strictEqual(remote.innerHTML, '', 'remote element should be completely empty after error');
+    }
+
+    '@test catches rerender error and cleans up {{#in-element}} remote DOM'() {
+      let fixture = document.querySelector('#qunit-fixture')!;
+      let remote = document.createElement('div');
+      remote.id = 'eb-remote-target-2';
+      fixture.appendChild(remote);
+
+      let getRemote = defineSimpleHelper(() => remote);
+      let state = new ThrowOnlyState();
+
+      let Root = defComponent(
+        '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<MaybeThrow @shouldThrow={{state.shouldThrow}}/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+        { scope: { ErrorBoundary, MaybeThrow, getRemote, state } }
+      );
+
+      this.renderComponent(Root, { expect: '<!---->' });
+
+      // Remote element should have content from successful render
+      this.assert.strictEqual(remote.textContent, 'ok', 'remote element has content before error');
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      // Remote element should be completely empty — no DOM nodes at all.
+      this.assert.strictEqual(remote.innerHTML, '', 'remote element should be completely empty after error');
+    }
+
     '@test multiple re-renders of ErrorBoundary content'() {
       let state = new InnerState();
 

@@ -23,7 +23,7 @@ import type {
 import type { OpaqueIterationItem, OpaqueIterator, Reference } from '@glimmer/reference';
 import type { MachineRegister, Register, SyscallRegister } from '@glimmer/vm';
 import { dev, expect, unwrapHandle } from '@glimmer/debug-util';
-import { associateDestroyableChild } from '@glimmer/destroyable';
+import { associateDestroyableChild, destroy } from '@glimmer/destroyable';
 import { assertGlobalContextWasSet } from '@glimmer/global-context';
 import { LOCAL_DEBUG, LOCAL_TRACE_LOGGING } from '@glimmer/local-debug-flags';
 import { createIteratorItemRef, UNDEFINED_REFERENCE } from '@glimmer/reference';
@@ -733,11 +733,14 @@ export class VM {
     try {
       return this._execute(initialize);
     } catch (e) {
-      // Clean up block stack without resetting tracking (preserve parent's state).
-      let elements = this.tree();
-      while (elements.hasBlocks) {
-        elements.popBlock();
-      }
+      // Drop open blocks without finalizing — finalize() inserts placeholder
+      // comments, but the DOM is being discarded by the error boundary anyway.
+      this.tree().dropBlocks();
+      // Destroy the sub-VM's destroyable root to clean up any associated
+      // resources (e.g. RemoteBlocks from {{#in-element}}). Without this,
+      // remote DOM content would leak when the error boundary catches the
+      // error and re-renders with error state.
+      destroy(this.#stacks.drop);
       throw e;
     }
   }
