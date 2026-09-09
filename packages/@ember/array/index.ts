@@ -1,26 +1,26 @@
 /**
 @module @ember/array
 */
-import { DEBUG } from '@glimmer/env';
-import { PROXY_CONTENT } from '@ember/-internals/metal';
+import { objectAt } from '@ember/-internals/metal/lib/object-at';
+import { replaceInNativeArray, replace } from '@ember/-internals/metal/lib/array';
+import computed from '@ember/-internals/metal/lib/computed';
 import {
-  objectAt,
-  replaceInNativeArray,
-  replace,
-  computed,
   beginPropertyChanges,
   endPropertyChanges,
-} from '@ember/-internals/metal';
-import { get, set } from '@ember/object';
+} from '@ember/-internals/metal/lib/property_events';
+import { get } from '@ember/-internals/metal/lib/property_get';
+import { set } from '@ember/-internals/metal/lib/property_set';
 import Mixin from '@ember/object/mixin';
+import { INTERNAL_MIXIN_CREATE } from '@ember/-internals/utils/lib/internal-mixin-create';
 import { assert } from '@ember/debug';
 import Enumerable from '@ember/enumerable';
 import MutableEnumerable from '@ember/enumerable/mutable';
-import { compare, typeOf } from '@ember/utils';
+import compare from '@ember/utils/lib/compare';
 import Observable from '@ember/object/observable';
 import type { MethodNamesOf, MethodParams, MethodReturns } from '@ember/-internals/utility-types';
-import type { ComputedPropertyCallback } from '@ember/-internals/metal';
+import type { ComputedPropertyCallback } from '@ember/-internals/metal/lib/computed';
 import { isEmberArray, setEmberArray } from '@ember/array/-internals';
+import isArray from './lib/is-array';
 
 export { default as makeArray } from './make';
 
@@ -136,65 +136,7 @@ function insertAt<T>(array: MutableArray<T>, index: number, item: T) {
   return item;
 }
 
-/**
-  Returns true if the passed object is an array or Array-like.
-
-  Objects are considered Array-like if any of the following are true:
-
-    - the object is a native Array
-    - the object has an objectAt property
-    - the object is an Object, and has a length property
-
-  Unlike `typeOf` this method returns true even if the passed object is
-  not formally an array but appears to be array-like (i.e. implements `Array`)
-
-  ```javascript
-  import { isArray } from '@ember/array';
-  import ArrayProxy from '@ember/array/proxy';
-
-  isArray();                                      // false
-  isArray([]);                                    // true
-  isArray(ArrayProxy.create({ content: [] }));    // true
-  ```
-
-  @method isArray
-  @static
-  @for @ember/array
-  @param {Object} obj The object to test
-  @return {Boolean} true if the passed object is an array or Array-like
-  @public
-*/
-export function isArray(obj: unknown): obj is ArrayLike<unknown> | EmberArray<unknown> {
-  if (DEBUG && typeof obj === 'object' && obj !== null) {
-    // SAFETY: Property read checks are safe if it's an object
-    let possibleProxyContent = (obj as any)[PROXY_CONTENT];
-    if (possibleProxyContent !== undefined) {
-      obj = possibleProxyContent;
-    }
-  }
-
-  // SAFETY: Property read checks are safe if it's an object
-  if (!obj || (obj as any).setInterval) {
-    return false;
-  }
-
-  if (Array.isArray(obj) || EmberArray.detect(obj)) {
-    return true;
-  }
-
-  let type = typeOf(obj);
-  if ('array' === type) {
-    return true;
-  }
-
-  // SAFETY: Property read checks are safe if it's an object
-  let length = (obj as any).length;
-  if (typeof length === 'number' && length === length && 'object' === type) {
-    return true;
-  }
-
-  return false;
-}
+export { isArray };
 
 /*
   This allows us to define computed properties that are not enumerable.
@@ -1198,7 +1140,7 @@ interface EmberArray<T> extends Enumerable {
   */
   without(value: T): NativeArray<T>;
 }
-const EmberArray = Mixin.create(Enumerable, {
+const EmberArray = Mixin[INTERNAL_MIXIN_CREATE](Enumerable, {
   init() {
     this._super(...arguments);
     setEmberArray(this);
@@ -1746,7 +1688,7 @@ interface MutableArray<T> extends EmberArray<T>, MutableEnumerable {
   */
   addObjects(objects: T[]): this;
 }
-const MutableArray = Mixin.create(EmberArray, MutableEnumerable, {
+const MutableArray = Mixin[INTERNAL_MIXIN_CREATE](EmberArray, MutableEnumerable, {
   clear() {
     let len = this.length;
     if (len === 0) {
@@ -1869,6 +1811,10 @@ const MutableArray = Mixin.create(EmberArray, MutableEnumerable, {
 /**
   Creates an `NativeArray` from an Array-like object.
   Does not modify the original object's contents.
+    
+  This exists primarily for historic reasons and should not be used
+  in new code. Prefer native [Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array)
+  or [trackedArray](/ember/release/functions/@ember%2Freactive%2Fcollections/trackedArray).
 
   Example
 
@@ -2078,7 +2024,7 @@ interface MutableArrayWithoutNative<T> extends Omit<
 */
 interface NativeArray<T> extends Array<T>, Observable, MutableArrayWithoutNative<T> {}
 
-let NativeArray = Mixin.create(MutableArray, Observable, {
+let NativeArray = Mixin[INTERNAL_MIXIN_CREATE](MutableArray, Observable, {
   objectAt(idx: number) {
     return this[idx];
   },

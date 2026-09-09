@@ -56,6 +56,18 @@ export const ENV = {
   */
   LOG_VERSION: true,
 
+  /**
+    The `LOG_INSPECTOR_HINT` property, when true, tells Ember to log a hint
+    suggesting the Ember Inspector browser extension when it is not detected.
+
+    @property LOG_INSPECTOR_HINT
+    @type Boolean
+    @default true
+    @for EmberENV
+    @public
+  */
+  LOG_INSPECTOR_HINT: true,
+
   RAISE_ON_DEPRECATION: false,
 
   STRUCTURED_PROFILE: false,
@@ -144,10 +156,6 @@ export const ENV = {
    */
   _RERENDER_LOOP_LIMIT: 1000,
 
-  EMBER_LOAD_HOOKS: {} as {
-    [hook: string]: Function[];
-  },
-
   FEATURES: {} as {
     [feature: string]: boolean;
   },
@@ -179,18 +187,6 @@ if (typeof EmberENV === 'object' && EmberENV !== null) {
     }
   }
 
-  // TODO this does not seem to be used by anything,
-  //      can we remove it? do we need to deprecate it?
-  let { EMBER_LOAD_HOOKS } = EmberENV;
-  if (typeof EMBER_LOAD_HOOKS === 'object' && EMBER_LOAD_HOOKS !== null) {
-    for (let hookName in EMBER_LOAD_HOOKS) {
-      if (!Object.prototype.hasOwnProperty.call(EMBER_LOAD_HOOKS, hookName)) continue;
-      let hooks = EMBER_LOAD_HOOKS[hookName];
-      if (Array.isArray(hooks)) {
-        ENV.EMBER_LOAD_HOOKS[hookName] = hooks.filter((hook) => typeof hook === 'function');
-      }
-    }
-  }
   let { FEATURES } = EmberENV;
   if (typeof FEATURES === 'object' && FEATURES !== null) {
     for (let feature in FEATURES) {

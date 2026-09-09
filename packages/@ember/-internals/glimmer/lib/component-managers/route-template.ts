@@ -15,10 +15,10 @@ import type {
 } from '@glimmer/interfaces';
 import type { Nullable } from '@ember/-internals/utility-types';
 import { DEBUG } from '@glimmer/env';
-import { capabilityFlagsFrom } from '@glimmer/manager';
-import type { Reference } from '@glimmer/reference';
-import { createDebugAliasRef, valueForRef } from '@glimmer/reference';
-import { curry, type CurriedValue } from '@glimmer/runtime';
+import { capabilityFlagsFrom } from '@glimmer/manager/lib/util/capabilities';
+import type { Reference } from '@glimmer/reference/lib/reference';
+import { createDebugAliasRef, valueForRef } from '@glimmer/reference/lib/reference';
+import { curry, type CurriedValue } from '@glimmer/runtime/lib/curried-value';
 import { unwrapTemplate } from './unwrap-template';
 
 interface RouteTemplateInstanceState {
@@ -28,7 +28,6 @@ interface RouteTemplateInstanceState {
 
 export interface RouteTemplateDefinitionState {
   name: string;
-  templateName: string;
 }
 
 const CAPABILITIES: InternalComponentCapabilities = {
@@ -48,7 +47,7 @@ const CAPABILITIES: InternalComponentCapabilities = {
   errorBoundary: false,
 };
 
-const CAPABILITIES_MASK = capabilityFlagsFrom(CAPABILITIES);
+const CAPABILITIES_MASK = /*@__PURE__*/ capabilityFlagsFrom(CAPABILITIES);
 
 class RouteTemplateManager
   implements
@@ -80,7 +79,7 @@ class RouteTemplateManager
   }
 
   getDebugCustomRenderTree(
-    { name, templateName }: RouteTemplateDefinitionState,
+    { name }: RouteTemplateDefinitionState,
     state: RouteTemplateInstanceState,
     args: CapturedArguments
   ): CustomRenderNode[] {
@@ -91,7 +90,6 @@ class RouteTemplateManager
         name,
         args,
         instance: state.controller,
-        template: templateName,
       },
     ];
   }
@@ -111,7 +109,7 @@ class RouteTemplateManager
   }
 }
 
-const ROUTE_TEMPLATE_MANAGER = new RouteTemplateManager();
+const ROUTE_TEMPLATE_MANAGER = /*@__PURE__*/ new RouteTemplateManager();
 
 /**
  * This "upgrades" a route template into a invocable component. Conceptually
@@ -138,7 +136,7 @@ export class RouteTemplate implements ComponentDefinition<
     // outlet's name. Also, setting this overrides `getDebugName()` in that
     // message. Is that desirable?
     this.resolvedName = name;
-    this.state = { name, templateName: unwrapped.moduleName };
+    this.state = { name };
     this.compilable = unwrapped.asLayout();
   }
 }

@@ -4,8 +4,13 @@ import {
   getOwner,
   setOwner,
 } from '@ember/-internals/owner';
-import { guidFor } from '@ember/-internals/utils';
-import { addChildView, setElementView, setViewElement } from '@ember/-internals/views';
+import { guidFor } from '@ember/-internals/utils/lib/guid';
+import {
+  addChildView,
+  setElementView,
+  setViewElement,
+} from '@ember/-internals/views/lib/system/utils';
+import { sendCoreViewEvent } from '@ember/-internals/views/lib/views/core-view-utils';
 import type { Nullable } from '@ember/-internals/utility-types';
 import { assert, debugFreeze } from '@ember/debug';
 import { _instrumentStart } from '@ember/instrumentation';
@@ -25,10 +30,15 @@ import type {
   WithDynamicLayout,
   WithDynamicTagName,
 } from '@glimmer/interfaces';
-import type { Reference } from '@glimmer/reference';
-import { childRefFor, createComputeRef, createPrimitiveRef, valueForRef } from '@glimmer/reference';
-import { reifyPositional } from '@glimmer/runtime';
-import { EMPTY_ARRAY } from '@glimmer/util';
+import type { Reference } from '@glimmer/reference/lib/reference';
+import {
+  childRefFor,
+  createComputeRef,
+  createPrimitiveRef,
+  valueForRef,
+} from '@glimmer/reference/lib/reference';
+import { reifyPositional } from '@glimmer/runtime/lib/vm/arguments';
+import { EMPTY_ARRAY } from '@glimmer/util/lib/array-utils';
 import { unwrapTemplate } from './unwrap-template';
 import {
   beginTrackFrame,
@@ -36,9 +46,8 @@ import {
   consumeTag,
   endTrackFrame,
   endUntrackFrame,
-  validateTag,
-  valueForTag,
-} from '@glimmer/validator';
+} from '@glimmer/validator/lib/tracking';
+import { validateTag, valueForTag } from '@glimmer/validator/lib/validators';
 import type Component from '../component';
 import type { DynamicScope } from '../renderer';
 import type RuntimeResolver from '../resolver';
@@ -52,6 +61,7 @@ import {
 
 import ComponentStateBucket from '../utils/curly-component-state-bucket';
 import { processComponentArgs } from '../utils/process-args';
+import { CURLY_MANAGER_BRAND } from './curly-brand';
 
 const COMPONENT_ARGS_MAP = new WeakMap<object, CapturedArguments['named']>();
 
@@ -131,6 +141,8 @@ export default class CurlyComponentManager
     WithDynamicLayout<ComponentStateBucket, RuntimeResolver>,
     WithDynamicTagName<ComponentStateBucket>
 {
+  readonly [CURLY_MANAGER_BRAND] = true;
+
   protected templateFor(component: Component): CompilableProgram | null {
     let { layout, layoutName } = component;
     let owner = getOwner(component);
@@ -307,20 +319,20 @@ export default class CurlyComponentManager
       addChildView(parentView, component);
     }
 
-    component.trigger('didReceiveAttrs');
+    sendCoreViewEvent(component, 'didReceiveAttrs');
 
     let hasWrappedElement = component.tagName !== '';
 
     // We usually do this in the `didCreateElement`, but that hook doesn't fire for tagless components
     if (!hasWrappedElement) {
       if (isInteractive) {
-        component.trigger('willRender');
+        sendCoreViewEvent(component, 'willRender');
       }
 
       component._transitionTo('hasElement');
 
       if (isInteractive) {
-        component.trigger('willInsertElement');
+        sendCoreViewEvent(component, 'willInsertElement');
       }
     }
 
@@ -344,7 +356,7 @@ export default class CurlyComponentManager
     }
 
     if (isInteractive && hasWrappedElement) {
-      component.trigger('willRender');
+      sendCoreViewEvent(component, 'willRender');
     }
 
     endUntrackFrame();
@@ -409,7 +421,7 @@ export default class CurlyComponentManager
 
     if (isInteractive) {
       beginUntrackFrame();
-      component.trigger('willInsertElement');
+      sendCoreViewEvent(component, 'willInsertElement');
       endUntrackFrame();
     }
   }
@@ -422,8 +434,8 @@ export default class CurlyComponentManager
   didCreate({ component, isInteractive }: ComponentStateBucket): void {
     if (isInteractive) {
       component._transitionTo('inDOM');
-      component.trigger('didInsertElement');
-      component.trigger('didRender');
+      sendCoreViewEvent(component, 'didInsertElement');
+      sendCoreViewEvent(component, 'didRender');
     }
   }
 
@@ -445,13 +457,13 @@ export default class CurlyComponentManager
       component.setProperties(props);
       component[IS_DISPATCHING_ATTRS] = false;
 
-      component.trigger('didUpdateAttrs');
-      component.trigger('didReceiveAttrs');
+      sendCoreViewEvent(component, 'didUpdateAttrs');
+      sendCoreViewEvent(component, 'didReceiveAttrs');
     }
 
     if (isInteractive) {
-      component.trigger('willUpdate');
-      component.trigger('willRender');
+      sendCoreViewEvent(component, 'willUpdate');
+      sendCoreViewEvent(component, 'willRender');
     }
 
     endUntrackFrame();
@@ -466,8 +478,8 @@ export default class CurlyComponentManager
 
   didUpdate({ component, isInteractive }: ComponentStateBucket): void {
     if (isInteractive) {
-      component.trigger('didUpdate');
-      component.trigger('didRender');
+      sendCoreViewEvent(component, 'didUpdate');
+      sendCoreViewEvent(component, 'didRender');
     }
   }
 
@@ -552,8 +564,6 @@ const CURLY_CAPABILITIES: InternalComponentCapabilities = {
   errorBoundary: false,
 };
 
-export const CURLY_COMPONENT_MANAGER = new CurlyComponentManager();
+export const CURLY_COMPONENT_MANAGER = /*@__PURE__*/ new CurlyComponentManager();
 
-export function isCurlyManager(manager: object): boolean {
-  return manager === CURLY_COMPONENT_MANAGER;
-}
+export { isCurlyManager } from './curly-brand';

@@ -7,8 +7,9 @@ import type {
   Nullable,
   RenderNode,
 } from '@glimmer/interfaces';
-import { expect } from '@glimmer/debug-util';
-import { assign, Stack } from '@glimmer/util';
+import { expect } from '@glimmer/debug-util/lib/platform-utils';
+import { assign } from '@glimmer/util/lib/object-utils';
+import { StackImpl as Stack } from '@glimmer/util/lib/collections';
 
 import { reifyArgsDebug } from './vm/arguments';
 
@@ -193,14 +194,9 @@ export default class DebugRenderTreeImpl<
   private captureNode(id: string, state: TBucket): CapturedRenderNode {
     let node = this.nodeFor(state);
     let { type, name, args, instance, refs } = node;
-    let template = this.captureTemplate(node);
     let bounds = this.captureBounds(node);
     let children = this.captureRefs(refs);
-    return { id, type, name, args: reifyArgsDebug(args), instance, template, bounds, children };
-  }
-
-  private captureTemplate({ template }: InternalRenderNode<TBucket>): Nullable<string> {
-    return template || null;
+    return { id, type, name, args: reifyArgsDebug(args), instance, bounds, children };
   }
 
   private captureBounds(node: InternalRenderNode<TBucket>): CapturedRenderNode['bounds'] {

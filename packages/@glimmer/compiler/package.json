@@ -2,13 +2,17 @@
   "name": "@glimmer/compiler",
   "version": "0.94.11",
   "license": "MIT",
+  "private": true,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/glimmerjs/glimmer-vm.git",
     "directory": "packages/@glimmer/compiler"
   },
   "type": "module",
-  "exports": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
   "repo-meta": {
     "supportcjs": true
   },

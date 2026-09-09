@@ -2,13 +2,17 @@
   "name": "@glimmer/program",
   "version": "0.94.10",
   "license": "MIT",
+  "private": true,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/glimmerjs/glimmer-vm.git",
     "directory": "packages/@glimmer/program"
   },
   "type": "module",
-  "exports": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
   "publishConfig": {
     "access": "public",
     "exports": {

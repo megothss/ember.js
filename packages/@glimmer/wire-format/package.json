@@ -2,6 +2,7 @@
   "name": "@glimmer/wire-format",
   "version": "0.94.8",
   "license": "MIT",
+  "private": true,
   "description": "",
   "repository": {
     "type": "git",
@@ -9,7 +10,10 @@
     "directory": "packages/@glimmer/wire-format"
   },
   "type": "module",
-  "exports": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
   "publishConfig": {
     "access": "public",
     "exports": {

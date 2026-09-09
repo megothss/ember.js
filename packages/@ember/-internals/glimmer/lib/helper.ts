@@ -2,17 +2,22 @@
 @module @ember/component
 */
 
-import type { InternalFactoryManager } from '@ember/-internals/container';
+import type { InternalFactoryManager } from '@ember/-internals/container/lib/container';
 import type { InternalFactory, InternalOwner } from '@ember/-internals/owner';
 import { setOwner } from '@ember/-internals/owner';
 import { FrameworkObject } from '@ember/object/-internals';
-import { getDebugName } from '@ember/-internals/utils';
+import getDebugName from '@ember/-internals/utils/lib/get-debug-name';
 import { assert } from '@ember/debug';
 import { join } from '@ember/runloop';
 import type { Arguments, HelperManager } from '@glimmer/interfaces';
-import { getInternalHelperManager, helperCapabilities, setHelperManager } from '@glimmer/manager';
-import type { DirtyableTag } from '@glimmer/validator';
-import { consumeTag, createTag, dirtyTag } from '@glimmer/validator';
+import { helperCapabilities } from '@glimmer/manager/lib/public/helper';
+import { setHelperManager } from '@glimmer/manager/lib/public/api';
+import type { DirtyableTag } from '@glimmer/interfaces';
+import { consumeTag } from '@glimmer/validator/lib/tracking';
+import { createTag, DIRTY_TAG as dirtyTag } from '@glimmer/validator/lib/validators';
+import { IS_CLASSIC_HELPER } from './helper-brand';
+
+export { isClassicHelper } from './helper-brand';
 
 const RECOMPUTE_TAG = Symbol('RECOMPUTE_TAG');
 
@@ -41,8 +46,6 @@ export interface HelperInstance<S> {
   [RECOMPUTE_TAG]: DirtyableTag;
 }
 
-const IS_CLASSIC_HELPER: unique symbol = Symbol('IS_CLASSIC_HELPER');
-
 export interface SimpleHelper<S> {
   compute: (positional: Positional<S>, named: Named<S>) => Return<S>;
 }
@@ -55,20 +58,32 @@ declare const SIGNATURE: unique symbol;
   Ember Helpers are functions that can compute values, and are used in templates.
   For example, this code calls a helper named `format-currency`:
 
-  ```app/templates/application.hbs
-  <Cost @cents={{230}} />
+  ```gjs {data-filename="app/templates/application.gjs"}
+  import Cost from '../components/cost';
+
+  <template>
+    <Cost @cents={{230}} />
+  </template>
   ```
 
-  ```app/components/cost.hbs
-  <div>{{format-currency @cents currency="$"}}</div>
+  ```gjs {data-filename="app/components/cost.gjs"}
+  import formatCurrency from '../helpers/format-currency';
+
+  <template>
+    <div>{{formatCurrency @cents currency="$"}}</div>
+  </template>
   ```
 
   Additionally a helper can be called as a nested helper.
   In this example, we show the formatted currency value if the `showMoney`
   named argument is truthy.
 
-  ```handlebars
-  {{if @showMoney (format-currency @cents currency="$")}}
+  ```gjs
+  import formatCurrency from '../helpers/format-currency';
+
+  <template>
+    {{if @showMoney (formatCurrency @cents currency="$")}}
+  </template>
   ```
 
   Helpers defined using a class must provide a `compute` function. For example:
@@ -178,10 +193,6 @@ export default class Helper<S = unknown> extends FrameworkObject {
 }
 /* eslint-enable import/export */
 
-export function isClassicHelper(obj: object): boolean {
-  return (obj as any)[IS_CLASSIC_HELPER] === true;
-}
-
 interface ClassicHelperStateBucket {
   instance: HelperInstance<unknown>;
   args: Arguments;
@@ -257,8 +268,6 @@ function isFactoryManager(obj: unknown): obj is InternalFactoryManager<object> {
 setHelperManager((owner: InternalOwner | undefined): ClassicHelperManager => {
   return new ClassicHelperManager(owner);
 }, Helper);
-
-export const CLASSIC_HELPER_MANAGER = getInternalHelperManager(Helper);
 
 ///////////
 

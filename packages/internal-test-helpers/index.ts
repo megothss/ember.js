@@ -18,14 +18,8 @@ export {
   expectDeprecationAsync,
   ignoreDeprecation,
 } from './lib/ember-dev/deprecation';
-export {
-  defComponent,
-  defineComponent,
-  defineSimpleHelper,
-  defineSimpleModifier,
-} from './lib/define-template-values';
+export { defineSimpleHelper, defineSimpleModifier } from './lib/define-template-values';
 export { testIf, testUnless } from './lib/conditional-test';
-export { default as compile } from './lib/compile';
 export { equalsElement, classes, styles, regex } from './lib/matchers';
 export { runAppend, runDestroy, runTask, runTaskNext, runLoopSettled } from './lib/run';
 export { getContext, setContext, unsetContext } from './lib/test-context';

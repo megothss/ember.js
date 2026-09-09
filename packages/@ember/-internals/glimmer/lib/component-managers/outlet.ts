@@ -1,7 +1,7 @@
 import type { InternalOwner } from '@ember/-internals/owner';
 import type { Nullable } from '@ember/-internals/utility-types';
 import { assert } from '@ember/debug';
-import EngineInstance from '@ember/engine/instance';
+import type EngineInstance from '@ember/engine/instance';
 import { _instrumentStart } from '@ember/instrumentation';
 import { precompileTemplate } from '@ember/template-compilation';
 import type {
@@ -15,10 +15,10 @@ import type {
   WithCreateInstance,
   WithCustomDebugRenderTree,
 } from '@glimmer/interfaces';
-import { capabilityFlagsFrom } from '@glimmer/manager';
-import type { Reference } from '@glimmer/reference';
-import { UNDEFINED_REFERENCE, valueForRef } from '@glimmer/reference';
-import { EMPTY_ARGS } from '@glimmer/runtime';
+import { capabilityFlagsFrom } from '@glimmer/manager/lib/util/capabilities';
+import type { Reference } from '@glimmer/reference/lib/reference';
+import { UNDEFINED_REFERENCE, valueForRef } from '@glimmer/reference/lib/reference';
+import { EMPTY_ARGS } from '@glimmer/runtime/lib/vm/arguments';
 import { unwrapTemplate } from './unwrap-template';
 
 import type { DynamicScope } from '../renderer';
@@ -62,7 +62,7 @@ const CAPABILITIES: InternalComponentCapabilities = {
   errorBoundary: false,
 };
 
-const CAPABILITIES_MASK = capabilityFlagsFrom(CAPABILITIES);
+const CAPABILITIES_MASK = /*@__PURE__*/ capabilityFlagsFrom(CAPABILITIES);
 
 class OutletComponentManager
   implements
@@ -98,15 +98,16 @@ class OutletComponentManager
       if (parentOwner && parentOwner !== currentOwner) {
         assert(
           'Expected currentOwner to be an EngineInstance',
-          currentOwner instanceof EngineInstance
+          currentOwner != null && 'buildChildEngineInstance' in currentOwner
         );
 
-        let { mountPoint } = currentOwner;
+        let engineInstance = currentOwner as EngineInstance;
+        let { mountPoint } = engineInstance;
 
         if (mountPoint) {
           state.engine = {
             mountPoint,
-            instance: currentOwner,
+            instance: engineInstance,
           };
         }
       }
@@ -132,7 +133,6 @@ class OutletComponentManager
       name: 'main',
       args: EMPTY_ARGS,
       instance: undefined,
-      template: undefined,
     });
 
     if (state.engine) {
@@ -142,7 +142,6 @@ class OutletComponentManager
         name: state.engine.mountPoint,
         args: EMPTY_ARGS,
         instance: state.engine.instance,
-        template: undefined,
       });
     }
 
@@ -171,7 +170,7 @@ class OutletComponentManager
   }
 }
 
-const OUTLET_MANAGER = new OutletComponentManager();
+const OUTLET_MANAGER = /*@__PURE__*/ new OutletComponentManager();
 
 const OUTLET_COMPONENT_TEMPLATE = precompileTemplate(
   '<@Component @controller={{@controller}} @model={{@model}} />',

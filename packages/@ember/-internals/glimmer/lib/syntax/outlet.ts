@@ -7,48 +7,62 @@ import type {
   DynamicScope,
   Template,
 } from '@glimmer/interfaces';
-import type { Reference } from '@glimmer/reference';
+import type { Reference } from '@glimmer/reference/lib/reference';
 import {
   childRefFromParts,
   createComputeRef,
   createConstRef,
   createDebugAliasRef,
   valueForRef,
-} from '@glimmer/reference';
-import type { CurriedValue } from '@glimmer/runtime';
-import { createCapturedArgs, curry, EMPTY_POSITIONAL } from '@glimmer/runtime';
-import { dict } from '@glimmer/util';
-import { hasInternalComponentManager } from '@glimmer/manager';
+} from '@glimmer/reference/lib/reference';
+import type { CurriedValue } from '@glimmer/runtime/lib/curried-value';
+import { createCapturedArgs, EMPTY_POSITIONAL } from '@glimmer/runtime/lib/vm/arguments';
+import { curry } from '@glimmer/runtime/lib/curried-value';
+import { dict } from '@glimmer/util/lib/collections';
+import { hasInternalComponentManager } from '@glimmer/manager/lib/internal/api';
 import { OutletComponent, type OutletDefinitionState } from '../component-managers/outlet';
 import { makeRouteTemplate } from '../component-managers/route-template';
 import { internalHelper } from '../helpers/internal-helper';
 import type { OutletState } from '../utils/outlet';
 
 /**
+ @module @ember/helper
+ */
+
+/**
   The `{{outlet}}` helper lets you specify where a child route will render in
   your template. An important use of the `{{outlet}}` helper is in your
-  application's `application.hbs` file:
+  application's `application.gjs` file:
 
-  ```app/templates/application.hbs
-  <MyHeader />
-
-  <div class="my-dynamic-content">
-    <!-- this content will change based on the current route, which depends on the current URL -->
-    {{outlet}}
-  </div>
-
-  <MyFooter />
+  ```gjs {data-filename="app/templates/application.gjs"}
+  import MyHeader from '../components/my-header';
+  import MyFooter from '../components/my-footer';
+    
+  <template>
+    <MyHeader />
+  
+    <div class="my-dynamic-content">
+      <!-- this content will change based on the current route, which depends on the current URL -->
+      {{outlet}}
+    </div>
+  
+    <MyFooter />
+  </template>
   ```
 
   See the [routing guide](https://guides.emberjs.com/release/routing/rendering-a-template/) for more
   information on how your `route` interacts with the `{{outlet}}` helper.
   Note: Your content __will not render__ if there isn't an `{{outlet}}` for it.
 
+  `outlet` is built-in and does not need to be imported. 
+ 
   @method outlet
-  @for Ember.Templates.helpers
+  @for Keywords
+  @static
+  @noimport
   @public
 */
-export const outletHelper = internalHelper(
+export const outletHelper = /*@__PURE__*/ internalHelper(
   (_args: CapturedArguments, owner?: InternalOwner, scope?: DynamicScope) => {
     assert('Expected owner to be present, {{outlet}} requires an owner', owner);
     assert(
@@ -149,15 +163,29 @@ export const outletHelper = internalHelper(
           // Store the value of the model
           let model = valueForRef(modelRef);
 
+          // The controller for this outlet, used to verify the outletRef
+          // still points to the correct route's data.
+          let outletController = state.controller;
+
           // Create a compute ref which we pass in as the `{{@model}}` reference
           // for the outlet. This ref will update and return the value of the
           // model _until_ the outlet itself changes. Once the outlet changes,
           // dynamic scope also changes, and so the original model ref would not
           // provide the correct updated value. So we stop updating and return
           // the _last_ model value for that outlet.
+          //
+          // We also verify that the outletRef still resolves to this route's
+          // data by comparing controller identity. This handles the case where
+          // a parent outlet is torn down first: the dynamic scope refs now
+          // point to the new route's outlet state, but this outlet's outer
+          // compute ref hasn't re-evaluated yet, so `lastState === state` is
+          // still true. The controller check catches this case.
           named['model'] = createComputeRef(() => {
             if (lastState === state) {
-              model = valueForRef(modelRef);
+              let currentOutlet = valueForRef(outletRef);
+              if (currentOutlet?.render?.controller === outletController) {
+                model = valueForRef(modelRef);
+              }
             }
 
             return model;

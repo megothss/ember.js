@@ -2,13 +2,17 @@
   "name": "@glimmer/encoder",
   "version": "0.93.8",
   "license": "MIT",
+  "private": true,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/glimmerjs/glimmer-vm.git",
     "directory": "packages/@glimmer/encoder"
   },
   "type": "module",
-  "exports": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
   "publishConfig": {
     "access": "public",
     "exports": {

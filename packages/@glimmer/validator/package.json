@@ -2,6 +2,7 @@
   "name": "@glimmer/validator",
   "version": "0.95.0",
   "license": "MIT",
+  "private": true,
   "description": "Objects used to track values and their dirtiness in Glimmer",
   "repository": {
     "type": "git",
@@ -9,7 +10,10 @@
     "directory": "packages/@glimmer/validator"
   },
   "type": "module",
-  "exports": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
   "publishConfig": {
     "access": "public",
     "exports": {
