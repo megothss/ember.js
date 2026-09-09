@@ -3,7 +3,6 @@ import {
   assertHTML,
   buildOwner,
   clickElement,
-  defComponent,
   defineSimpleHelper,
   defineSimpleModifier,
   moduleFor,
@@ -11,6 +10,8 @@ import {
 } from 'internal-test-helpers';
 
 import { DEBUG } from '@glimmer/env';
+import { precompileTemplate } from '@ember/template-compilation';
+import templateOnly from '@ember/component/template-only';
 import { ErrorBoundary, setComponentManager } from '@ember/component';
 import { array, on } from '@glimmer/runtime';
 import { tracked } from '@glimmer/tracking';
@@ -18,7 +19,7 @@ import GlimmerishComponent from '../../utils/glimmerish-component';
 
 import { run } from '@ember/runloop';
 import { associateDestroyableChild, destroy, registerDestructor } from '@glimmer/destroyable';
-import { componentCapabilities } from '@glimmer/manager';
+import { componentCapabilities, setComponentTemplate } from '@glimmer/manager';
 import { renderComponent, type RenderResult } from '../../../lib/renderer';
 import type Owner from '@ember/owner';
 import { setOwner } from '@ember/-internals/owner';
@@ -54,24 +55,26 @@ class InnerState {
 
 // --- Test helper components ---
 
-const Throwing = defComponent('{{this.boom}}', {
-  component: class extends GlimmerishComponent {
+const Throwing = setComponentTemplate(
+  precompileTemplate('{{this.boom}}'),
+  class extends GlimmerishComponent {
     get boom(): never {
       throw new Error('render error');
     }
-  },
-});
+  }
+);
 
-const MaybeThrow = defComponent('{{this.value}}', {
-  component: class extends GlimmerishComponent {
+const MaybeThrow = setComponentTemplate(
+  precompileTemplate('{{this.value}}'),
+  class extends GlimmerishComponent {
     get value() {
       if ((this as any).args.shouldThrow) {
         throw new Error('conditional error');
       }
       return 'ok';
     }
-  },
-});
+  }
+);
 
 // --- Test case base class ---
 
@@ -129,18 +132,24 @@ moduleFor(
     }
 
     '@test renders default block when no error'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default>hello</:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>hello</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'hello' });
     }
 
     '@test catches error during initial render and shows error block'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught' });
@@ -158,9 +167,12 @@ moduleFor(
       console.error = (...args: unknown[]) => errors.push(args);
 
       try {
-        let Root = defComponent(
-          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-          { scope: { ErrorBoundary, Throwing } }
+        let Root = setComponentTemplate(
+          precompileTemplate(
+            '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+            { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+          ),
+          templateOnly()
         );
 
         this.renderComponent(Root, { expect: 'caught' });
@@ -196,9 +208,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -230,9 +245,12 @@ moduleFor(
     /* eslint-enable no-console */
 
     '@test passes error object to error block'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: render error' });
@@ -244,9 +262,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -263,9 +284,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|><button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|><button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<button>Retry</button>' });
@@ -279,18 +303,25 @@ moduleFor(
     }
 
     '@test nested boundaries — inner catches, outer unaffected'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default>outer ok <ErrorBoundary><:default><Throwing /></:default><:error as |err|>inner caught</:error></ErrorBoundary></:default><:error as |err|>outer caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>outer ok <ErrorBoundary><:default><Throwing /></:default><:error as |err|>inner caught</:error></ErrorBoundary></:default><:error as |err|>outer caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'outer ok inner caught' });
     }
 
     '@test renders nothing when no error block provided'() {
-      let Root = defComponent('<ErrorBoundary><Throwing /></ErrorBoundary>', {
-        scope: { ErrorBoundary, Throwing },
-      });
+      let Root = setComponentTemplate(
+        precompileTemplate('<ErrorBoundary><Throwing /></ErrorBoundary>', {
+          strictMode: true,
+          scope: () => ({ ErrorBoundary, Throwing }),
+        }),
+        templateOnly()
+      );
 
       this.renderComponent(Root, { expect: '<!---->' });
     }
@@ -306,17 +337,20 @@ moduleFor(
         increment = () => this.count++;
       }
 
-      let Counter = defComponent(
-        '<span>{{this.count}}</span><button {{on "click" this.increment}}>+</button>',
-        {
-          component: CounterComponent,
-          scope: { on },
-        }
+      let Counter = setComponentTemplate(
+        precompileTemplate(
+          '<span>{{this.count}}</span><button {{on "click" this.increment}}>+</button>',
+          { strictMode: true, scope: () => ({ on }) }
+        ),
+        CounterComponent
       );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /><Counter /></:default><:error as |err retry|><button class="retry" {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, Counter, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /><Counter /></:default><:error as |err retry|><button class="retry" {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, Counter, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<button class="retry">Retry</button>' });
@@ -335,41 +369,57 @@ moduleFor(
     }
 
     '@test sibling content survives error and recovery round-trip'() {
-      let Root = defComponent(
-        '<span>before</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary><span>after</span>',
-        { scope: { ErrorBoundary, Throwing } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<span>before</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary><span>after</span>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<span>before</span>caught<span>after</span>' });
     }
 
     '@test catches error from deeply nested grandchild component'() {
-      let Child = defComponent('<Throwing />', { scope: { Throwing } });
-      let Parent = defComponent('<Child />', { scope: { Child } });
+      let Child = setComponentTemplate(
+        precompileTemplate('<Throwing />', { strictMode: true, scope: () => ({ Throwing }) }),
+        templateOnly()
+      );
+      let Parent = setComponentTemplate(
+        precompileTemplate('<Child />', { strictMode: true, scope: () => ({ Child }) }),
+        templateOnly()
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Parent /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Parent } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Parent /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Parent }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: render error' });
     }
 
     '@test catches error from item in each loop'() {
-      let ItemComponent = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.item === 'bad') {
               throw new Error('bad item');
             }
             return (this as any).args.item;
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#each (array "good" "bad" "also-good") as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ItemComponent, array } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#each (array "good" "bad" "also-good") as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, array }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: bad item' });
@@ -386,9 +436,12 @@ moduleFor(
         return 'helper ok';
       });
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{maybeThrowHelper state.shouldThrow}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, maybeThrowHelper, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{maybeThrowHelper state.shouldThrow}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, maybeThrowHelper, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'helper ok' });
@@ -404,9 +457,12 @@ moduleFor(
         throw new Error('helper error');
       });
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{throwingHelper}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, throwingHelper } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{throwingHelper}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, throwingHelper }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: helper error' });
@@ -418,9 +474,12 @@ moduleFor(
         element.setAttribute('data-modified', 'true');
       });
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><div {{trackingModifier}}>content</div></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, trackingModifier } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><div {{trackingModifier}}>content</div></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, trackingModifier }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<div data-modified="true">content</div>' });
@@ -434,17 +493,21 @@ moduleFor(
       }
       let state = new State();
 
-      let FullName = defComponent('{{this.fullName}}', {
-        component: class extends GlimmerishComponent {
+      let FullName = setComponentTemplate(
+        precompileTemplate('{{this.fullName}}'),
+        class extends GlimmerishComponent {
           get fullName() {
             return `${(this as any).args.first} ${(this as any).args.last}`;
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><FullName @first={{state.firstName}} @last={{state.lastName}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, FullName, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><FullName @first={{state.firstName}} @last={{state.lastName}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, FullName, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'Ada Lovelace' });
@@ -461,9 +524,12 @@ moduleFor(
     }
 
     '@test multiple sibling boundaries — one errors, other stays intact'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>first caught</:error></ErrorBoundary><ErrorBoundary><:default>second ok</:default><:error as |err|>second caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>first caught</:error></ErrorBoundary><ErrorBoundary><:default>second ok</:default><:error as |err|>second caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'first caughtsecond ok' });
@@ -475,9 +541,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<span>{{state.counter}}</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<span>{{state.counter}}</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<span>0</span>caught' });
@@ -499,9 +568,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<span>{{state.label}}</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<span>{{state.label}}</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<span>hello</span>caught' });
@@ -513,9 +585,12 @@ moduleFor(
     }
 
     '@test catches error from conditional branch during initial render'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#if true}}<Throwing />{{else}}safe{{/if}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#if true}}<Throwing />{{else}}safe{{/if}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: render error' });
@@ -527,20 +602,24 @@ moduleFor(
       }
       let state = new State();
 
-      let ItemComponent = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.item === 'bomb') {
               throw new Error('bomb item');
             }
             return (this as any).args.item;
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ItemComponent, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ab' });
@@ -559,9 +638,12 @@ moduleFor(
         throw new Error('modifier error');
       });
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><div {{throwingModifier}}>content</div></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, throwingModifier } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><div {{throwingModifier}}>content</div></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, throwingModifier }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: modifier error' });
@@ -609,13 +691,17 @@ moduleFor(
         DestroyableComponent
       );
 
-      let Tracked = defComponent('{{this.value}}', {
-        component: DestroyableComponent as any,
-      });
+      let Tracked = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        DestroyableComponent as any
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Tracked @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Tracked, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Tracked @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Tracked, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'alive' });
@@ -629,9 +715,12 @@ moduleFor(
     }
 
     '@test retry that still throws shows error block again'() {
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught <button>Retry</button>' });
@@ -648,9 +737,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#if state.showDanger}}<Throwing />{{else}}safe{{/if}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#if state.showDanger}}<Throwing />{{else}}safe{{/if}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'safe' });
@@ -669,9 +761,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -696,9 +791,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -724,17 +822,21 @@ moduleFor(
     }
 
     '@test error in error block fallback bubbles to parent boundary'() {
-      let ThrowingFallback = defComponent('{{this.boom}}', {
-        component: class extends GlimmerishComponent {
+      let ThrowingFallback = setComponentTemplate(
+        precompileTemplate('{{this.boom}}'),
+        class extends GlimmerishComponent {
           get boom(): never {
             throw new Error('fallback error');
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><ErrorBoundary><:default><Throwing /></:default><:error as |err|><ThrowingFallback /></:error></ErrorBoundary></:default><:error as |err|>outer caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, ThrowingFallback } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><ErrorBoundary><:default><Throwing /></:default><:error as |err|><ThrowingFallback /></:error></ErrorBoundary></:default><:error as |err|>outer caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, ThrowingFallback }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'outer caught: fallback error' });
@@ -746,20 +848,24 @@ moduleFor(
       }
       let state = new State();
 
-      let ItemComponent = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.item === 'bomb') {
               throw new Error('bomb');
             }
             return (this as any).args.item;
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ItemComponent, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ab' });
@@ -784,20 +890,24 @@ moduleFor(
       }
       let state = new State();
 
-      let ItemComponent = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.item === 'bomb') {
               throw new Error('bomb');
             }
             return (this as any).args.item;
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ItemComponent, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ab' });
@@ -827,20 +937,24 @@ moduleFor(
     '@test @retryWith resets error state when value changes'() {
       let state = new RetryState();
 
-      let ConditionalThrow = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ConditionalThrow = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.shouldThrow) {
               throw new Error('route error');
             }
             return 'ok';
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ConditionalThrow, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -864,20 +978,24 @@ moduleFor(
     '@test @retryWith does not reset if value unchanged'() {
       let state = new RetryState();
 
-      let ConditionalThrow = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ConditionalThrow = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.shouldThrow) {
               throw new Error('route error');
             }
             return 'ok';
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ConditionalThrow, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -899,9 +1017,12 @@ moduleFor(
       let state = new RouteOnlyState();
 
       // Always throws regardless of route
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught: render error' });
@@ -917,9 +1038,12 @@ moduleFor(
       let state = new RouteOnlyState();
 
       // Always throws
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught <button>Retry</button>' });
@@ -934,20 +1058,24 @@ moduleFor(
     '@test @retryWith rerender error then retry without fixing re-catches'() {
       let state = new RetryState();
 
-      let ConditionalThrow = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ConditionalThrow = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.shouldThrow) {
               throw new Error('route error');
             }
             return 'ok';
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ConditionalThrow, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -968,20 +1096,24 @@ moduleFor(
     '@test @retryWith with retry after fixing state recovers'() {
       let state = new RetryState();
 
-      let ConditionalThrow = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ConditionalThrow = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.shouldThrow) {
               throw new Error('route error');
             }
             return 'ok';
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ConditionalThrow, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -1007,9 +1139,12 @@ moduleFor(
       }
       let state = new State();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state, on } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -1068,20 +1203,24 @@ moduleFor(
     '@test @retryWith with array value resets when element changes'() {
       let state = new ArrayRetryState();
 
-      let ConditionalThrow = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ConditionalThrow = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.shouldThrow) {
               throw new Error('route error');
             }
             return 'ok';
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ConditionalThrow, state, array } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, array }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -1105,20 +1244,24 @@ moduleFor(
     '@test @retryWith with array value does not reset if elements unchanged'() {
       let state = new ArrayRetryState();
 
-      let ConditionalThrow = defComponent('{{this.value}}', {
-        component: class extends GlimmerishComponent {
+      let ConditionalThrow = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
           get value() {
             if ((this as any).args.shouldThrow) {
               throw new Error('route error');
             }
             return 'ok';
           }
-        },
-      });
+        }
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, ConditionalThrow, state, array } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, array }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -1140,9 +1283,12 @@ moduleFor(
       let state = new ThrowOnlyState();
 
       // @retryWith is not passed — tests that undefined/missing arg is handled
-      let Root = defComponent(
-        '<ErrorBoundary @retryWith={{state.missing}}><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary @retryWith={{state.missing}}><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -1157,9 +1303,12 @@ moduleFor(
     '@test ErrorBoundary without @retryWith stays in error state'() {
       let state = new ThrowOnlyState();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
@@ -1180,11 +1329,17 @@ moduleFor(
     '@test sibling content after ErrorBoundary updates correctly'() {
       let state = new SiblingState();
 
-      let Sibling = defComponent('{{state.label}}', { scope: { state } });
+      let Sibling = setComponentTemplate(
+        precompileTemplate('{{state.label}}', { strictMode: true, scope: () => ({ state }) }),
+        templateOnly()
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary><Sibling />',
-        { scope: { ErrorBoundary, Sibling } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary><Sibling />',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Sibling }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'contentbefore' });
@@ -1201,11 +1356,17 @@ moduleFor(
     '@test component inside ErrorBoundary re-renders with sibling content after'() {
       let state = new InnerState();
       let siblingState = new SiblingState();
-      let Inner = defComponent('{{state.value}}', { scope: { state } });
+      let Inner = setComponentTemplate(
+        precompileTemplate('{{state.value}}', { strictMode: true, scope: () => ({ state }) }),
+        templateOnly()
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary><span>{{siblingState.label}}</span>',
-        { scope: { ErrorBoundary, Inner, siblingState } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary><span>{{siblingState.label}}</span>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Inner, siblingState }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'hello<span>before</span>' });
@@ -1227,9 +1388,12 @@ moduleFor(
     '@test tracked state inside ErrorBoundary content updates'() {
       let state = new InnerState();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'hello' });
@@ -1243,9 +1407,12 @@ moduleFor(
     '@test ErrorBoundary inside conditional that toggles'() {
       let state = new ConditionalState();
 
-      let Root = defComponent(
-        '{{#if state.show}}<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary>{{/if}}',
-        { scope: { ErrorBoundary, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '{{#if state.show}}<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary>{{/if}}',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'content' });
@@ -1265,9 +1432,12 @@ moduleFor(
       let state = new SiblingState();
       let cond = new ConditionalState();
 
-      let Root = defComponent(
-        '{{#if cond.show}}<ErrorBoundary><:default>eb</:default><:error as |err|>caught</:error></ErrorBoundary>{{state.label}}{{/if}}',
-        { scope: { ErrorBoundary, state, cond } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '{{#if cond.show}}<ErrorBoundary><:default>eb</:default><:error as |err|>caught</:error></ErrorBoundary>{{state.label}}{{/if}}',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state, cond }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ebbefore' });
@@ -1280,11 +1450,17 @@ moduleFor(
 
     '@test ErrorBoundary wrapping component with tracked state'() {
       let state = new InnerState();
-      let Inner = defComponent('{{state.value}}', { scope: { state } });
+      let Inner = setComponentTemplate(
+        precompileTemplate('{{state.value}}', { strictMode: true, scope: () => ({ state }) }),
+        templateOnly()
+      );
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Inner } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Inner }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'hello' });
@@ -1303,9 +1479,12 @@ moduleFor(
 
       let getRemote = defineSimpleHelper(() => remote);
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<Throwing/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, Throwing, getRemote } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<Throwing/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, getRemote }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'caught' });
@@ -1327,9 +1506,12 @@ moduleFor(
       let getRemote = defineSimpleHelper(() => remote);
       let state = new ThrowOnlyState();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<MaybeThrow @shouldThrow={{state.shouldThrow}}/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, MaybeThrow, getRemote, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<MaybeThrow @shouldThrow={{state.shouldThrow}}/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, getRemote, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: '<!---->' });
@@ -1353,9 +1535,12 @@ moduleFor(
     '@test multiple re-renders of ErrorBoundary content'() {
       let state = new InnerState();
 
-      let Root = defComponent(
-        '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
-        { scope: { ErrorBoundary, state } }
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
+        ),
+        templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'hello' });
