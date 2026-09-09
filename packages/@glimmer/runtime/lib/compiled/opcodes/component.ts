@@ -38,6 +38,7 @@ import {
   VM_GET_COMPONENT_LAYOUT_OP,
   VM_GET_COMPONENT_SELF_OP,
   VM_GET_COMPONENT_TAG_NAME_OP,
+  VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP,
   VM_INVOKE_COMPONENT_LAYOUT_OP,
   VM_MAIN_OP,
   VM_POPULATE_LAYOUT_OP,
@@ -71,7 +72,7 @@ import debugToString from '@glimmer/debug-util/lib/debug-to-string';
 import { expect, unwrap } from '@glimmer/debug-util/lib/platform-utils';
 import assert from '@glimmer/debug-util/lib/assert';
 import { unwrapTemplate } from '@glimmer/debug-util/lib/template';
-import { registerDestructor } from '@glimmer/destroyable';
+import { associateDestroyableChild, registerDestructor } from '@glimmer/destroyable';
 import { hasInternalComponentManager } from '@glimmer/manager/lib/internal/api';
 import { managerHasCapability } from '@glimmer/manager/lib/util/capabilities';
 import { isConstRef, valueForRef } from '@glimmer/reference/lib/reference';
@@ -85,8 +86,13 @@ import type { CurriedValue } from '../../curried-value';
 import type { UpdatingVM } from '../../vm';
 import type { VM } from '../../vm/append';
 import type { BlockArgumentsImpl } from '../../vm/arguments';
+import { getTrackingDepth, restoreTrackingTo } from '@glimmer/validator';
+
+import { NewTreeBuilder } from '../../vm/element-builder';
+import { clearDOMRange, ErrorBoundaryOpcode } from '../../vm/update';
 
 import { ConcreteBounds } from '../../bounds';
+import type { ErrorBoundaryState } from '../../component/error-boundary';
 import { hasCustomDebugRenderTreeLifecycle } from '../../component/interfaces';
 import { resolveComponent } from '../../component/resolve';
 import { isCurriedType, isCurriedValue, resolveCurriedValue } from '../../curried-value';
@@ -897,6 +903,108 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_OP, (vm, { op1: register }) => {
   let state = check(vm.fetchValue(check(register, CheckRegister)), CheckFinishedComponentInstance);
 
   vm.call(state.handle);
+});
+
+// Error Boundary Guarded Invocation
+// Executes the component layout in a sub-VM wrapped in try-catch.
+// On error during initial render, cleans up partial DOM and re-renders with error state.
+APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }) => {
+  let state = check(vm.fetchValue(check(register, CheckRegister)), CheckFinishedComponentInstance);
+  let errorState = state.state as ErrorBoundaryState;
+
+  // Capture current scope (which has self, named args, blocks all set up)
+  // Use the layout handle's resolved address as the closure PC so the sub-VM
+  // starts executing from the layout code directly.
+  let layoutAddr = vm.context.program.heap.getaddr(state.handle);
+  let closure = vm.capture(0, layoutAddr);
+
+  // Save the parent tree builder's cursor BEFORE pushing the block, so the
+  // sub-VM inserts content at the same position the parent VM would. Without
+  // this, beginBlock defaults to nextSibling=null, appending at the end of the
+  // parent element — which inverts the bounds when sibling content follows.
+  let parentNextSibling = vm.tree().nextSibling;
+
+  let block = vm.tree().pushResettableBlock();
+
+  // Record insertion point so we can clean up partial DOM on error.
+  let parent = block.parentElement();
+  let insertionMarker = parent.lastChild;
+
+  // Save debug render tree depth so we can roll back stale entries on error.
+  let renderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
+
+  // Save tracking frame depth so we can discard stale frames from a failed sub-VM.
+  let trackingDepth = getTrackingDepth();
+
+  try {
+    // Use beginBlock (not resume) since this is a fresh block with no prior content.
+    // Pass parentNextSibling so content is inserted at the correct cursor position.
+    let subTree = NewTreeBuilder.beginBlock(vm.env, block, parentNextSibling);
+    let subVM = closure.evaluate(subTree);
+
+    let children: UpdatingOpcode[] = [];
+    let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
+
+    // Use executeErrorBoundary to avoid resetting the parent VM's tracking
+    // state and to clean up remote blocks on error.
+    let result = subVM.executeErrorBoundary((subVM) => {
+      subVM.updateWith(errorBoundaryOp);
+      subVM.pushUpdating(children);
+    });
+
+    associateDestroyableChild(errorBoundaryOp, result.drop);
+    vm.associateDestroyable(errorBoundaryOp);
+    vm.updateWith(errorBoundaryOp);
+  } catch (error) {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.error('An error was caught by <ErrorBoundary>:', error);
+    }
+
+    // Roll back stale tracking frames left by the failed sub-VM render.
+    restoreTrackingTo(trackingDepth);
+
+    // Roll back stale debug render tree entries from the failed render.
+    vm.env.debugRenderTree?.rollbackTo(renderTreeDepth);
+
+    // Remove any partial DOM nodes inserted during the failed render.
+    // We can't use clear(block) because child bounds may be partially initialized.
+    // null end marker is safe here: during initial render, no sibling content
+    // has been rendered after this component yet, so removing from start to
+    // the end of the parent won't affect other nodes.
+    let start = insertionMarker ? insertionMarker.nextSibling : parent.firstChild;
+    clearDOMRange(parent, start, null);
+
+    // Reset block to empty state for the retry render.
+    block.resetPartial();
+
+    // Set error state so the template takes the error branch
+    errorState.setError(error);
+
+    // Re-execute layout with error state (will render the error block).
+    let retryTree = NewTreeBuilder.beginBlock(vm.env, block, parentNextSibling);
+    let retryVM = closure.evaluate(retryTree);
+
+    let children: UpdatingOpcode[] = [];
+    let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
+
+    let result = retryVM.executeErrorBoundary((retryVM) => {
+      retryVM.updateWith(errorBoundaryOp);
+      retryVM.pushUpdating(children);
+    });
+
+    associateDestroyableChild(errorBoundaryOp, result.drop);
+    vm.associateDestroyable(errorBoundaryOp);
+    vm.updateWith(errorBoundaryOp);
+  }
+
+  // Pop the ResettableBlock from the parent tree builder. It was pushed for
+  // the sub-VM's use, but the sub-VM has its own tree builder. Without this
+  // pop, VM_DID_RENDER_LAYOUT_OP pops the ResettableBlock instead of the
+  // AppendingBlock from VM_BEGIN_COMPONENT_TRANSACTION_OP, leaving the
+  // AppendingBlock orphaned on the stack and corrupting bounds for all
+  // subsequent sibling content.
+  vm.tree().popBlock();
 });
 
 APPEND_OPCODES.add(VM_DID_RENDER_LAYOUT_OP, (vm, { op1: register }) => {

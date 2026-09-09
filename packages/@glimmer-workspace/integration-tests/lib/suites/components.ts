@@ -879,7 +879,7 @@ export class GlimmerishComponents extends RenderTest {
     };
 
     try {
-      assert.expect(7);
+      assert.expect(6);
 
       this.registerComponent(
         'Glimmer',

@@ -45,6 +45,8 @@ export interface FixedBlock extends AppendingBlock {}
  */
 export interface ResettableBlock extends FixedBlock {
   reset(env: Environment): Nullable<SimpleNode>;
+  /** Reset internal tracking state without DOM cleanup (for error boundary recovery). */
+  resetPartial(): void;
 }
 
 export interface DOMStack {
@@ -110,6 +112,7 @@ export interface TreeBuilder extends Cursor, DOMStack, TreeOperations {
   pushResettableBlock(): ResettableBlock;
   pushBlockList(list: Bounds[]): AppendingBlock;
   popBlock(): AppendingBlock;
+  dropBlocks(): void;
 
   didAppendBounds(bounds: Bounds): void;
 }

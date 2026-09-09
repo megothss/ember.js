@@ -6,6 +6,7 @@
 export { setComponentTemplate, getComponentTemplate } from '@glimmer/manager/lib/public/template';
 
 export { default } from '@ember/-internals/glimmer/lib/component';
+export { default as ErrorBoundary } from '@ember/-internals/glimmer/lib/components/error-boundary';
 export { default as Input } from '@ember/-internals/glimmer/lib/components/input';
 export { default as Textarea } from '@ember/-internals/glimmer/lib/components/textarea';
 export { componentCapabilities as capabilities } from '@glimmer/manager/lib/public/component';

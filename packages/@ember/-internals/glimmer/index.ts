@@ -114,6 +114,7 @@
 export { default as template, templateCacheCounters } from '@glimmer/opcode-compiler/lib/template';
 
 export { default as RootTemplate } from './lib/templates/root';
+export { default as ErrorBoundary } from './lib/components/error-boundary';
 export { default as Input } from './lib/components/input';
 export { default as LinkTo } from './lib/components/link-to';
 export { default as Textarea } from './lib/components/textarea';

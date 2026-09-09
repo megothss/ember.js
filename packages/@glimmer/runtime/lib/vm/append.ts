@@ -25,7 +25,7 @@ import type { Reference } from '@glimmer/reference/lib/reference';
 import type { MachineRegister, Register, SyscallRegister } from '@glimmer/vm/lib/registers';
 import { dev, expect } from '@glimmer/debug-util/lib/platform-utils';
 import { unwrapHandle } from '@glimmer/debug-util/lib/template';
-import { associateDestroyableChild } from '@glimmer/destroyable';
+import { associateDestroyableChild, destroy } from '@glimmer/destroyable';
 import { DESTROYABLE_META_KEY } from '@glimmer/util/lib/destroyable-key';
 import { assertGlobalContextWasSet } from '@glimmer/global-context';
 import { LOCAL_DEBUG, LOCAL_TRACE_LOGGING } from '@glimmer/local-debug-flags';
@@ -737,6 +737,48 @@ export class VM {
   }
 
   /// EXECUTION
+
+  /**
+   * Execute the VM for an error boundary sub-VM. Unlike `execute`, this does
+   * NOT wrap in a tracking transaction or call `resetTracking()` on error,
+   * which would destroy the parent VM's tracking state. It only cleans up
+   * open blocks on error before re-throwing.
+   */
+  /**
+   * Execute the VM without resetting the parent's tracking state on error.
+   * Used by TryOpcode re-renders — popBlock/finalize inserts placeholder
+   * comments (<!---->), which is correct for conditional blocks.
+   */
+  executeGuarded(initialize?: (vm: this) => void): RenderResult {
+    try {
+      return this._execute(initialize);
+    } catch (e) {
+      let elements = this.tree();
+      while (elements.hasBlocks) {
+        elements.popBlock();
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Execute the VM for an ErrorBoundary sub-VM. Unlike executeGuarded, this
+   * drops blocks without finalize (the DOM is discarded by the error boundary)
+   * and destroys the sub-VM's destroyable root to clean up RemoteBlocks.
+   */
+  executeErrorBoundary(initialize?: (vm: this) => void): RenderResult {
+    try {
+      return this._execute(initialize);
+    } catch (e) {
+      // Drop open blocks without finalizing — finalize() inserts placeholder
+      // comments, but the DOM is being discarded by the error boundary anyway.
+      this.tree().dropBlocks();
+      // Destroy the sub-VM's destroyable root to clean up any associated
+      // resources (e.g. RemoteBlocks from {{#in-element}}).
+      destroy(this.#stacks.drop);
+      throw e;
+    }
+  }
 
   execute(initialize?: (vm: this) => void): RenderResult {
     if (DEBUG) {

@@ -78,6 +78,7 @@ module('Managers', () => {
             wrapped: false,
             willDestroy: false,
             hasSubOwner: false,
+            errorBoundary: false,
           };
         }
 

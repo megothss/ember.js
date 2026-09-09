@@ -95,6 +95,38 @@ export function endUntrackFrame(): void {
   CURRENT_TRACKER = OPEN_TRACK_FRAMES.pop() || null;
 }
 
+/**
+ * Return the current depth of the tracking frame stack. Used together with
+ * `restoreTrackingTo` for error boundary rollback: save the depth before a
+ * sub-VM runs and restore it if the sub-VM throws, discarding any stale
+ * tracking frames from the failed render.
+ */
+export function getTrackingDepth(): number {
+  return OPEN_TRACK_FRAMES.length;
+}
+
+/**
+ * Pop tracking frames (and their associated DEBUG tracking transactions) back
+ * to the given depth. This discards stale frames left by a failed render.
+ *
+ * OPEN_TRACK_FRAMES stores the *previous* CURRENT_TRACKER when each frame was
+ * opened. So the entry at index N is the tracker that was active at depth N
+ * (the tracker that was current before depth N+1 was opened). When popping
+ * back to `depth`, the last popped entry is the tracker that was active at
+ * the target depth — that's what CURRENT_TRACKER should be restored to.
+ */
+export function restoreTrackingTo(depth: number): void {
+  while (OPEN_TRACK_FRAMES.length > depth) {
+    // Each popped entry is the CURRENT_TRACKER that was saved when
+    // beginTrackFrame opened the next deeper frame. The last popped
+    // entry is the tracker for the target depth.
+    CURRENT_TRACKER = OPEN_TRACK_FRAMES.pop() as Tracker | null;
+    if (DEBUG) {
+      unwrap(debug.endTrackingTransaction)();
+    }
+  }
+}
+
 // This function is only for handling errors and resetting to a valid state
 export function resetTracking(): string | void {
   while (OPEN_TRACK_FRAMES.length > 0) {

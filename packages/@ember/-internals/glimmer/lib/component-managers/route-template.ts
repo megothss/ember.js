@@ -44,6 +44,7 @@ const CAPABILITIES: InternalComponentCapabilities = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 const CAPABILITIES_MASK = /*@__PURE__*/ capabilityFlagsFrom(CAPABILITIES);

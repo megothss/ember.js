@@ -108,6 +108,27 @@ export class NewTreeBuilder implements TreeBuilder {
     return stack;
   }
 
+  /**
+   * Creates a tree builder that renders into a fresh (empty) resettable block.
+   * Unlike `resume`, this does NOT call `block.reset()`, so it's safe for
+   * blocks that have never been rendered or have partially-initialized children.
+   *
+   * @param nextSibling - Optional insertion point. When provided, new content
+   *   is inserted before this node instead of appended at the end. Used by
+   *   error boundary recovery to maintain correct position among siblings.
+   */
+  static beginBlock(
+    env: Environment,
+    block: ResettableBlock,
+    nextSibling?: Nullable<SimpleNode>
+  ): NewTreeBuilder {
+    let parentNode = block.parentElement();
+    let stack = new this(env, parentNode, nextSibling ?? null).initialize();
+    stack.pushBlock(block);
+
+    return stack;
+  }
+
   constructor(env: Environment, parentNode: SimpleElement, nextSibling: Nullable<SimpleNode>) {
     this.pushElement(parentNode, nextSibling);
     this.env = env;
@@ -185,6 +206,19 @@ export class NewTreeBuilder implements TreeBuilder {
     this.block().finalize(this);
     this.__closeBlock();
     return expect(this.blockStack.pop(), 'Expected popBlock to return a block');
+  }
+
+  /**
+   * Drop all blocks from the stack without finalizing them.
+   * Used during error cleanup where the DOM is being discarded anyway —
+   * finalize() would insert placeholder comments into blocks that are
+   * about to be destroyed.
+   */
+  dropBlocks(): void {
+    while (this.blockStack.size > 0) {
+      this.__closeBlock();
+      this.blockStack.pop();
+    }
   }
 
   __openBlock(): void {}
@@ -505,8 +539,13 @@ export class RemoteBlock extends AppendingBlockImpl {
       // and avoid clearing the node if it was. In most cases this shouldn't happen,
       // so this might hide bugs where the code clears nested nodes unnecessarily,
       // so we should eventually try to do the correct fix.
-      if (this.parentElement() === this.firstNode().parentNode) {
-        clear(this);
+      try {
+        if (this.parentElement() === this.firstNode().parentNode) {
+          clear(this);
+        }
+      } catch {
+        // Block bounds are not fully initialized (e.g. an error was thrown
+        // during initial render before content was appended). Nothing to clear.
       }
     });
   }
@@ -520,13 +559,29 @@ export class ResettableBlockImpl extends AppendingBlockImpl implements Resettabl
 
   reset(): Nullable<SimpleNode> {
     destroy(this);
-    let nextSibling = clear(this);
+    let nextSibling = this.first ? clear(this) : null;
 
     this.first = null;
     this.last = null;
     this.nesting = 0;
-
     return nextSibling;
+  }
+
+  /**
+   * Reset the block's internal tracking state without touching the DOM.
+   * Used during error boundary recovery when the DOM has already been
+   * cleaned up manually (because child bounds may be partially initialized).
+   *
+   * Note: destroy(this) marks the block as destroyed and runs child
+   * destructors, but the block itself is then reused for DOM position
+   * tracking only. New destroyable children are associated with the
+   * ErrorBoundaryOpcode, not this block, so the destroyed state is safe.
+   */
+  resetPartial(): void {
+    destroy(this);
+    this.first = null;
+    this.last = null;
+    this.nesting = 0;
   }
 }
 
