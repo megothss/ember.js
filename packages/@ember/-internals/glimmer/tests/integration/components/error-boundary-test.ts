@@ -108,6 +108,19 @@ class ErrorBoundaryTestCase extends AbstractStrictTestCase {
     assertHTML(options.expect);
     this.assertStableRerender();
   }
+
+  /** Render `Root` and expect the DEBUG assertion about block combinations. */
+  assertBlocksAssertion(Root: object) {
+    (window as any).expectAssertion(() => {
+      run(() =>
+        renderComponent(Root, {
+          owner: this.owner,
+          env: { document: document, isInteractive: true, hasDOM: true },
+          into: this.element,
+        })
+      );
+    }, /<ErrorBoundary> accepts a <:default> block only on its own\. Use <:try> with <:catch>\./);
+  }
 }
 
 // --- Tests ---
@@ -122,7 +135,7 @@ moduleFor(
     '@test renders default block when no error'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>hello</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>hello</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary }) }
         ),
         templateOnly()
@@ -131,10 +144,93 @@ moduleFor(
       this.renderComponent(Root, { expect: 'hello' });
     }
 
+    // --- block names ---
+
+    '@test renders the <:try> block when no error'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>hello</:try><:catch>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+    }
+
+    '@test renders the <:catch> block with error and retry when <:try> throws'() {
+      class State {
+        @tracked shouldThrow = true;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught: {{err.message}} <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: conditional error <button>Retry</button>' });
+
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught: conditional error <button>Retry</button>',
+      });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'ok',
+      });
+    }
+
+    '@test <:catch> can come before <:try>'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:catch as |err|>caught: {{err.message}}</:catch><:try><Throwing /></:try></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: render error' });
+    }
+
+    '@test asserts when given both <:try> and <:default>'() {
+      this.assertBlocksAssertion(
+        setComponentTemplate(
+          precompileTemplate(
+            '<ErrorBoundary><:try>a</:try><:default>b</:default></ErrorBoundary>',
+            {
+              strictMode: true,
+              scope: () => ({ ErrorBoundary }),
+            }
+          ),
+          templateOnly()
+        )
+      );
+    }
+
+    '@test asserts when <:catch> is paired with <:default> instead of <:try>'() {
+      this.assertBlocksAssertion(
+        setComponentTemplate(
+          precompileTemplate(
+            '<ErrorBoundary><:default>a</:default><:catch>b</:catch></ErrorBoundary>',
+            {
+              strictMode: true,
+              scope: () => ({ ErrorBoundary }),
+            }
+          ),
+          templateOnly()
+        )
+      );
+    }
+
     '@test catches error during initial render and shows error block'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
         ),
         templateOnly()
@@ -157,7 +253,7 @@ moduleFor(
       try {
         let Root = setComponentTemplate(
           precompileTemplate(
-            '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+            '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
             { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
           ),
           templateOnly()
@@ -198,7 +294,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
         ),
         templateOnly()
@@ -235,7 +331,7 @@ moduleFor(
     '@test passes error object to error block'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
         ),
         templateOnly()
@@ -252,7 +348,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
         ),
         templateOnly()
@@ -274,7 +370,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|><button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|><button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
         ),
         templateOnly()
@@ -293,7 +389,7 @@ moduleFor(
     '@test nested boundaries — inner catches, outer unaffected'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>outer ok <ErrorBoundary><:default><Throwing /></:default><:error as |err|>inner caught</:error></ErrorBoundary></:default><:error as |err|>outer caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>outer ok <ErrorBoundary><:try><Throwing /></:try><:catch as |err|>inner caught</:catch></ErrorBoundary></:try><:catch as |err|>outer caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
         ),
         templateOnly()
@@ -335,7 +431,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /><Counter /></:default><:error as |err retry|><button class="retry" {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /><Counter /></:try><:catch as |err retry|><button class="retry" {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, Counter, state, on }) }
         ),
         templateOnly()
@@ -359,7 +455,7 @@ moduleFor(
     '@test sibling content survives error and recovery round-trip'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<span>before</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary><span>after</span>',
+          '<span>before</span><ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary><span>after</span>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
         ),
         templateOnly()
@@ -380,7 +476,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Parent /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Parent /></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Parent }) }
         ),
         templateOnly()
@@ -404,7 +500,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#each (array "good" "bad" "also-good") as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#each (array "good" "bad" "also-good") as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, array }) }
         ),
         templateOnly()
@@ -426,7 +522,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{maybeThrowHelper state.shouldThrow}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{maybeThrowHelper state.shouldThrow}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, maybeThrowHelper, state }) }
         ),
         templateOnly()
@@ -447,7 +543,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{throwingHelper}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{throwingHelper}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, throwingHelper }) }
         ),
         templateOnly()
@@ -464,7 +560,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><div {{trackingModifier}}>content</div></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><div {{trackingModifier}}>content</div></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, trackingModifier }) }
         ),
         templateOnly()
@@ -492,7 +588,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><FullName @first={{state.firstName}} @last={{state.lastName}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><FullName @first={{state.firstName}} @last={{state.lastName}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, FullName, state }) }
         ),
         templateOnly()
@@ -514,7 +610,7 @@ moduleFor(
     '@test multiple sibling boundaries — one errors, other stays intact'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Throwing /></:default><:error as |err|>first caught</:error></ErrorBoundary><ErrorBoundary><:default>second ok</:default><:error as |err|>second caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>first caught</:catch></ErrorBoundary><ErrorBoundary><:try>second ok</:try><:catch as |err|>second caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
         ),
         templateOnly()
@@ -531,7 +627,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<span>{{state.counter}}</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<span>{{state.counter}}</span><ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
         ),
         templateOnly()
@@ -558,7 +654,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<span>{{state.label}}</span><ErrorBoundary><:default><Throwing /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<span>{{state.label}}</span><ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
         ),
         templateOnly()
@@ -575,7 +671,7 @@ moduleFor(
     '@test catches error from conditional branch during initial render'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#if true}}<Throwing />{{else}}safe{{/if}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#if true}}<Throwing />{{else}}safe{{/if}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
         ),
         templateOnly()
@@ -604,7 +700,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state }) }
         ),
         templateOnly()
@@ -628,7 +724,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><div {{throwingModifier}}>content</div></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><div {{throwingModifier}}>content</div></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, throwingModifier }) }
         ),
         templateOnly()
@@ -686,7 +782,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Tracked @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Tracked @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Tracked, state }) }
         ),
         templateOnly()
@@ -705,7 +801,7 @@ moduleFor(
     '@test retry that still throws shows error block again'() {
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, on }) }
         ),
         templateOnly()
@@ -727,7 +823,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#if state.showDanger}}<Throwing />{{else}}safe{{/if}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#if state.showDanger}}<Throwing />{{else}}safe{{/if}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
         ),
         templateOnly()
@@ -751,7 +847,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
         ),
         templateOnly()
@@ -781,7 +877,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
         ),
         templateOnly()
@@ -821,7 +917,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><ErrorBoundary><:default><Throwing /></:default><:error as |err|><ThrowingFallback /></:error></ErrorBoundary></:default><:error as |err|>outer caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><ErrorBoundary><:try><Throwing /></:try><:catch as |err|><ThrowingFallback /></:catch></ErrorBoundary></:try><:catch as |err|>outer caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, ThrowingFallback }) }
         ),
         templateOnly()
@@ -850,7 +946,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state, on }) }
         ),
         templateOnly()
@@ -892,7 +988,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state, on }) }
         ),
         templateOnly()
@@ -930,7 +1026,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
         ),
         templateOnly()
@@ -952,7 +1048,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
         ),
         templateOnly()
@@ -998,7 +1094,7 @@ moduleFor(
       // without re-attempting the default block.
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><CountedThrow />{{state.label}}</:default><:error>caught {{state.label}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><CountedThrow />{{state.label}}</:try><:catch>caught {{state.label}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, CountedThrow, state }) }
         ),
         templateOnly()
@@ -1039,7 +1135,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><FailsWhilePositive @count={{state.count}} /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><FailsWhilePositive @count={{state.count}} /></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, FailsWhilePositive, state }) }
         ),
         templateOnly()
@@ -1071,7 +1167,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
         ),
         templateOnly()
@@ -1100,7 +1196,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
         ),
         templateOnly()
@@ -1169,7 +1265,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary><Sibling />',
+          '<ErrorBoundary><:try>content</:try><:catch as |err|>caught</:catch></ErrorBoundary><Sibling />',
           { strictMode: true, scope: () => ({ ErrorBoundary, Sibling }) }
         ),
         templateOnly()
@@ -1196,7 +1292,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary><span>{{siblingState.label}}</span>',
+          '<ErrorBoundary><:try><Inner /></:try><:catch as |err|>caught</:catch></ErrorBoundary><span>{{siblingState.label}}</span>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Inner, siblingState }) }
         ),
         templateOnly()
@@ -1223,7 +1319,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{state.value}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
         ),
         templateOnly()
@@ -1242,7 +1338,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '{{#if state.show}}<ErrorBoundary><:default>content</:default><:error as |err|>caught</:error></ErrorBoundary>{{/if}}',
+          '{{#if state.show}}<ErrorBoundary><:try>content</:try><:catch as |err|>caught</:catch></ErrorBoundary>{{/if}}',
           { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
         ),
         templateOnly()
@@ -1267,7 +1363,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '{{#if cond.show}}<ErrorBoundary><:default>eb</:default><:error as |err|>caught</:error></ErrorBoundary>{{state.label}}{{/if}}',
+          '{{#if cond.show}}<ErrorBoundary><:try>eb</:try><:catch as |err|>caught</:catch></ErrorBoundary>{{state.label}}{{/if}}',
           { strictMode: true, scope: () => ({ ErrorBoundary, state, cond }) }
         ),
         templateOnly()
@@ -1290,7 +1386,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default><Inner /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try><Inner /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Inner }) }
         ),
         templateOnly()
@@ -1314,7 +1410,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<Throwing/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#in-element (getRemote) insertBefore=null}}<Throwing/>{{/in-element}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, getRemote }) }
         ),
         templateOnly()
@@ -1341,7 +1437,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{#in-element (getRemote) insertBefore=null}}<MaybeThrow @shouldThrow={{state.shouldThrow}}/>{{/in-element}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{#in-element (getRemote) insertBefore=null}}<MaybeThrow @shouldThrow={{state.shouldThrow}}/>{{/in-element}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, getRemote, state }) }
         ),
         templateOnly()
@@ -1370,7 +1466,7 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary><:default>{{state.value}}</:default><:error as |err|>caught</:error></ErrorBoundary>',
+          '<ErrorBoundary><:try>{{state.value}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
           { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
         ),
         templateOnly()

@@ -10,6 +10,9 @@ import type {
   WithCreateInstance,
 } from '@glimmer/interfaces';
 import type { Reference } from '@glimmer/reference/lib/reference';
+import type { VMArgumentsImpl } from '@glimmer/runtime/lib/vm/arguments';
+import { DEBUG } from '@glimmer/env';
+import { assert } from '@ember/debug';
 import { setComponentTemplate } from '@glimmer/manager/lib/public/template';
 import { setInternalComponentManager } from '@glimmer/manager/lib/internal/api';
 import { createConstRef } from '@glimmer/reference/lib/reference';
@@ -23,7 +26,8 @@ const CAPABILITIES: InternalComponentCapabilities = {
   dynamicLayout: false,
   dynamicTag: false,
   prepareArgs: false,
-  createArgs: false,
+  // Only needed for the DEBUG check of which blocks were passed.
+  createArgs: true,
   attributeHook: false,
   elementHook: false,
   createCaller: false,
@@ -46,12 +50,25 @@ class ErrorBoundaryManager
   create(
     _owner: Owner,
     _definition: object,
-    _args: Nullable<VMArguments>,
+    args: Nullable<VMArguments>,
     _env: Environment,
     _dynamicScope: Nullable<DynamicScope>,
     _caller: Nullable<Reference>,
-    _hasDefaultBlock: boolean
+    hasDefaultBlock: boolean
   ): ErrorBoundaryState {
+    if (DEBUG) {
+      // Checked here rather than in the layout: the layout renders inside the
+      // boundary, which would catch the assertion and show the <:catch> block.
+      // Implicit content can't be mixed with named blocks, so a default block
+      // next to <:try> or <:catch> is always an explicit <:default>.
+      let blocks = (args as VMArgumentsImpl | null)?.blocks;
+      let hasNamedBlock = blocks !== undefined && (blocks.has('try') || blocks.has('catch'));
+      assert(
+        '<ErrorBoundary> accepts a <:default> block only on its own. Use <:try> with <:catch>.',
+        !(hasDefaultBlock && hasNamedBlock)
+      );
+    }
+
     return new ErrorBoundaryStateImpl();
   }
 
