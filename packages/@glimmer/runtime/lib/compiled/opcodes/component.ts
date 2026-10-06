@@ -86,7 +86,13 @@ import type { CurriedValue } from '../../curried-value';
 import type { UpdatingVM } from '../../vm';
 import type { VM } from '../../vm/append';
 import type { BlockArgumentsImpl } from '../../vm/arguments';
-import { getTrackingDepth, restoreTrackingTo } from '@glimmer/validator';
+import {
+  beginTrackFrame,
+  consumeTag,
+  endTrackFrame,
+  getTrackingDepth,
+  unwindTrackingTo,
+} from '@glimmer/validator/lib/tracking';
 
 import { NewTreeBuilder } from '../../vm/element-builder';
 import { clearDOMRange, ErrorBoundaryOpcode } from '../../vm/update';
@@ -934,8 +940,11 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
   // Save debug render tree depth so we can roll back stale entries on error.
   let renderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
 
-  // Save tracking frame depth so we can discard stale frames from a failed sub-VM.
+  // Save tracking frame depth so we can unwind stale frames from a failed
+  // sub-VM, then open a frame of our own so that everything the attempt
+  // consumes can be recovered from it if the attempt throws.
   let trackingDepth = getTrackingDepth();
+  beginTrackFrame();
 
   try {
     // Use beginBlock (not resume) since this is a fresh block with no prior content.
@@ -953,6 +962,9 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
       subVM.pushUpdating(children);
     });
 
+    // The attempt succeeded: hand what it consumed to the enclosing frame.
+    consumeTag(endTrackFrame());
+
     associateDestroyableChild(errorBoundaryOp, result.drop);
     vm.associateDestroyable(errorBoundaryOp);
     vm.updateWith(errorBoundaryOp);
@@ -962,8 +974,9 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
       console.error('An error was caught by <ErrorBoundary>:', error);
     }
 
-    // Roll back stale tracking frames left by the failed sub-VM render.
-    restoreTrackingTo(trackingDepth);
+    // Roll back the tracking frames left by the failed sub-VM render, keeping
+    // what they consumed so the boundary can retry when any of it changes.
+    let failedTag = unwindTrackingTo(trackingDepth);
 
     // Roll back stale debug render tree entries from the failed render.
     vm.env.debugRenderTree?.rollbackTo(renderTreeDepth);
@@ -980,7 +993,8 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     block.resetPartial();
 
     // Set error state so the template takes the error branch
-    errorState.setError(error);
+    errorState.setError(error, failedTag);
+    errorState.consumeFailedTag();
 
     // Re-execute layout with error state (will render the error block).
     let retryTree = NewTreeBuilder.beginBlock(vm.env, block, parentNextSibling);

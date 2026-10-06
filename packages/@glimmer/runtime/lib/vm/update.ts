@@ -12,6 +12,7 @@ import type {
   Scope,
   SimpleComment,
   SimpleNode,
+  Tag,
   UpdatingOpcode,
   UpdatingVM as IUpdatingVM,
 } from '@glimmer/interfaces';
@@ -25,7 +26,14 @@ import { updateRef, valueForRef } from '@glimmer/reference/lib/reference';
 import { logStep } from '@glimmer/util/lib/debug-steps';
 import { StackImpl as Stack } from '@glimmer/util/lib/collections';
 import { debug } from '@glimmer/validator/lib/debug';
-import { getTrackingDepth, resetTracking, restoreTrackingTo } from '@glimmer/validator/lib/tracking';
+import {
+  beginTrackFrame,
+  consumeTag,
+  endTrackFrame,
+  getTrackingDepth,
+  resetTracking,
+  unwindTrackingTo,
+} from '@glimmer/validator/lib/tracking';
 
 import type { SimpleElement } from '@simple-dom/interface';
 
@@ -83,7 +91,7 @@ export class UpdatingVM implements IUpdatingVM {
       let opcode = this.frame.nextStatement();
 
       if (opcode === undefined) {
-        this._popFrame();
+        this._popFrame(true);
         continue;
       }
 
@@ -94,8 +102,10 @@ export class UpdatingVM implements IUpdatingVM {
         try {
           opcode.evaluate(this);
         } catch (error) {
-          // Restore tracking frames to the depth before the failed opcode.
-          restoreTrackingTo(trackingDepth);
+          // Unwind tracking frames to the depth before the failed opcode,
+          // folding what they consumed into the enclosing frame. The error
+          // boundary that handles the error collects it from there.
+          consumeTag(unwindTrackingTo(trackingDepth));
 
           // Walk up the frame stack to find an error boundary that can handle
           // JavaScript errors.
@@ -120,10 +130,13 @@ export class UpdatingVM implements IUpdatingVM {
     }
   }
 
-  private _popFrame() {
+  private _popFrame(completed = false) {
     let frame = this.frameStack.current;
     if (frame && frame.isErrorBoundary) {
       this._errorBoundaryDepth--;
+      if (completed) {
+        frame.didComplete();
+      }
     }
     this.frameStack.pop();
   }
@@ -140,9 +153,13 @@ export class UpdatingVM implements IUpdatingVM {
     this.frameStack.push(new UpdatingVMFrame(ops, handler));
   }
 
-  tryErrorBoundary(ops: UpdatingOpcode[], handler: ExceptionHandler) {
+  /**
+   * Push an error boundary's frame. `onComplete` runs only when every opcode
+   * in the frame has been evaluated, not when an error or a re-render unwinds it.
+   */
+  tryErrorBoundary(ops: UpdatingOpcode[], handler: ExceptionHandler, onComplete: () => void) {
     this._errorBoundaryDepth++;
-    this.frameStack.push(new UpdatingVMFrame(ops, handler, true));
+    this.frameStack.push(new UpdatingVMFrame(ops, handler, true, onComplete));
   }
 
   throw() {
@@ -298,16 +315,25 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     this.errorState.hasError;
 
-    // Check @retryWith: consumes the retryWith ref's tag (keeping it in the
-    // EB's tracking frame) and, if the value changed while in error state,
-    // clears the error and returns true to trigger a re-render.
-    if (this.errorState.checkRetryWith()) {
+    // While in error state, keep the failed render's tag in the EB's tracking
+    // frame so a change to anything it read brings us back here.
+    this.errorState.consumeFailedTag();
+
+    // Retry if state read by the failed render has changed since.
+    if (this.errorState.shouldRetry()) {
       this.handleException();
       return;
     }
 
-    vm.tryErrorBoundary(this.children, this);
+    // Track the children in a frame of our own, so that if one of them throws,
+    // handleCaughtError can recover everything they consumed before the throw.
+    beginTrackFrame();
+    vm.tryErrorBoundary(this.children, this, this.didCompleteChildren);
   }
+
+  private didCompleteChildren = () => {
+    consumeTag(endTrackFrame());
+  };
 
   /**
    * Restore tracking frames and consumed tags to the state captured in
@@ -317,10 +343,19 @@ export class ErrorBoundaryOpcode extends TryOpcode {
    * backtracking assertions on later mutations.
    */
   private restoreTracking() {
-    restoreTrackingTo(this.cachedTrackingDepth);
+    this.unwindTracking();
+  }
+
+  /**
+   * Like restoreTracking(), but returns a tag combining everything the
+   * unwound frames consumed.
+   */
+  private unwindTracking(): Tag {
+    let tag = unwindTrackingTo(this.cachedTrackingDepth);
     if (DEBUG) {
       debug.resetConsumedTags?.();
     }
+    return tag;
   }
 
   /**
@@ -396,11 +431,15 @@ export class ErrorBoundaryOpcode extends TryOpcode {
     // Reset block state without DOM cleanup (already done above).
     bounds.resetPartial();
 
+    beginTrackFrame();
+
     try {
       this.renderIntoBlock();
+      consumeTag(endTrackFrame());
     } catch (error) {
-      // Restore tracking frames opened by the failed re-render attempt.
-      restoreTrackingTo(trackingDepth);
+      // Unwind tracking frames opened by the failed re-render attempt,
+      // keeping what they consumed.
+      let failedTag = unwindTrackingTo(trackingDepth);
 
       // Roll back stale debug render tree entries.
       env.debugRenderTree?.rollbackTo(this.cachedRenderTreeDepth);
@@ -417,7 +456,8 @@ export class ErrorBoundaryOpcode extends TryOpcode {
         // eslint-disable-next-line no-console
         console.error('An error was caught by <ErrorBoundary>:', error);
       }
-      this.errorState.setError(error);
+      this.errorState.setError(error, failedTag);
+      this.errorState.consumeFailedTag();
 
       this.renderIntoBlock();
       this.clearCachedNodes();
@@ -435,7 +475,7 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       context: { env },
     } = this;
 
-    this.restoreTracking();
+    let failedTag = this.unwindTracking();
 
     destroyChildren(this);
 
@@ -443,7 +483,8 @@ export class ErrorBoundaryOpcode extends TryOpcode {
       // eslint-disable-next-line no-console
       console.error('An error was caught by <ErrorBoundary>:', error);
     }
-    this.errorState.setError(error);
+    this.errorState.setError(error, failedTag);
+    this.errorState.consumeFailedTag();
 
     // Clean up DOM manually rather than using bounds.reset() (via resume()),
     // because the bounds tree may be corrupted: inner TryOpcodes or
@@ -723,8 +764,13 @@ class UpdatingVMFrame {
   constructor(
     private ops: UpdatingOpcode[],
     private exceptionHandler: Nullable<ExceptionHandler>,
-    readonly isErrorBoundary = false
+    readonly isErrorBoundary = false,
+    private onComplete: (() => void) | null = null
   ) {}
+
+  didComplete() {
+    this.onComplete?.();
+  }
 
   goto(index: number) {
     this.current = index;

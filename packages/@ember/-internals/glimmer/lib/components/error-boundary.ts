@@ -9,12 +9,13 @@ import type {
   VMArguments,
   WithCreateInstance,
 } from '@glimmer/interfaces';
-import type { Reference } from '@glimmer/reference';
-import { setComponentTemplate, setInternalComponentManager } from '@glimmer/manager';
-import { createConstRef, valueForRef } from '@glimmer/reference';
-import { ErrorBoundaryStateImpl } from '@glimmer/runtime';
+import type { Reference } from '@glimmer/reference/lib/reference';
+import { setComponentTemplate } from '@glimmer/manager/lib/public/template';
+import { setInternalComponentManager } from '@glimmer/manager/lib/internal/api';
+import { createConstRef } from '@glimmer/reference/lib/reference';
+import { ErrorBoundaryStateImpl } from '@glimmer/runtime/lib/component/error-boundary';
 
-import type { ErrorBoundaryState } from '@glimmer/runtime';
+import type { ErrorBoundaryState } from '@glimmer/runtime/lib/component/error-boundary';
 
 import ErrorBoundaryTemplate from '../templates/error-boundary';
 
@@ -22,12 +23,12 @@ const CAPABILITIES: InternalComponentCapabilities = {
   dynamicLayout: false,
   dynamicTag: false,
   prepareArgs: false,
-  createArgs: true,
+  createArgs: false,
   attributeHook: false,
   elementHook: false,
   createCaller: false,
   dynamicScope: false,
-  updateHook: true,
+  updateHook: false,
   createInstance: true,
   wrapped: false,
   willDestroy: false,
@@ -45,20 +46,13 @@ class ErrorBoundaryManager
   create(
     _owner: Owner,
     _definition: object,
-    args: Nullable<VMArguments>,
+    _args: Nullable<VMArguments>,
     _env: Environment,
     _dynamicScope: Nullable<DynamicScope>,
     _caller: Nullable<Reference>,
     _hasDefaultBlock: boolean
   ): ErrorBoundaryState {
-    let state = new ErrorBoundaryStateImpl();
-
-    if (args && args.named.has('retryWith')) {
-      let retryWithRef = args.named.get('retryWith');
-      state.initRetryWith(retryWithRef, valueForRef(retryWithRef));
-    }
-
-    return state;
+    return new ErrorBoundaryStateImpl();
   }
 
   didCreate(): void {}
@@ -76,16 +70,6 @@ class ErrorBoundaryManager
 
   getDestroyable(_instance: ErrorBoundaryState): Nullable<Destroyable> {
     return null;
-  }
-
-  update(instance: ErrorBoundaryState, _dynamicScope: Nullable<DynamicScope>): void {
-    // Consume the @retryWith ref's tag at the ROOT tracking level (outside
-    // the EB component's JumpIfNotModified scope). This ensures the root's
-    // combined tag includes the retryWith value, so root JumpIfNotModified
-    // falls through when @retryWith changes — which in turn allows the EB's
-    // opcodes to run.
-    // The actual reset logic is in ErrorBoundaryOpcode.evaluate().
-    instance.consumeRetryWith();
   }
 }
 

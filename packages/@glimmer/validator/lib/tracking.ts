@@ -116,7 +116,25 @@ export function getTrackingDepth(): number {
  * the target depth — that's what CURRENT_TRACKER should be restored to.
  */
 export function restoreTrackingTo(depth: number): void {
+  unwindTrackingTo(depth);
+}
+
+/**
+ * Pop tracking frames back to the given depth like `restoreTrackingTo`, but
+ * keep what they consumed: returns a tag combining every tag consumed by the
+ * popped frames. An error boundary uses it to learn which tracked state a
+ * failed render read before it threw, so it can retry when that state changes.
+ */
+export function unwindTrackingTo(depth: number): Tag {
+  let tags: Tag[] = [];
+
   while (OPEN_TRACK_FRAMES.length > depth) {
+    // CURRENT_TRACKER is the innermost open frame, the one being discarded.
+    // It is null inside an untrack frame, which consumed nothing.
+    if (CURRENT_TRACKER !== null) {
+      tags.push(CURRENT_TRACKER.combine());
+    }
+
     // Each popped entry is the CURRENT_TRACKER that was saved when
     // beginTrackFrame opened the next deeper frame. The last popped
     // entry is the tracker for the target depth.
@@ -125,6 +143,8 @@ export function restoreTrackingTo(depth: number): void {
       unwrap(debug.endTrackingTransaction)();
     }
   }
+
+  return combine(tags);
 }
 
 // This function is only for handling errors and resetting to a valid state
@@ -266,11 +286,21 @@ export function track(block: () => void, debugLabel?: string | false): Tag {
   beginTrackFrame(debugLabel);
 
   let tag;
+  let threw = true;
 
   try {
     block();
+    threw = false;
   } finally {
     tag = endTrackFrame();
+
+    // A block that throws still depended on what it read before throwing.
+    // Hand that to the parent frame, so an error boundary can retry when it
+    // changes. A flag rather than catch + rethrow keeps "pause on uncaught
+    // exceptions" pointing at the original throw.
+    if (threw) {
+      consumeTag(tag);
+    }
   }
 
   return tag;

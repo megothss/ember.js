@@ -37,6 +37,7 @@ export {
   isTracking,
   resetTracking,
   restoreTrackingTo,
+  unwindTrackingTo,
   track,
   untrack,
 } from './lib/tracking';

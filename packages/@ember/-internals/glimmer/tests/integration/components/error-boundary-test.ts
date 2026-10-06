@@ -24,22 +24,10 @@ import { renderComponent, type RenderResult } from '../../../lib/renderer';
 import type Owner from '@ember/owner';
 import { setOwner } from '@ember/-internals/owner';
 
-// --- Tracked state helpers for @retryWith tests ---
+// --- Tracked state helpers ---
 // Declared at module level to avoid TS1206 "Decorators are not valid here"
 // which occurs with decorators inside anonymous class expressions.
 
-class RetryState {
-  @tracked shouldThrow = false;
-  @tracked routeName = 'route-a';
-}
-class RouteOnlyState {
-  @tracked routeName = 'route-a';
-}
-class ArrayRetryState {
-  @tracked shouldThrow = false;
-  @tracked valA = 'a';
-  @tracked valB = 'b';
-}
 class ThrowOnlyState {
   @tracked shouldThrow = false;
 }
@@ -932,138 +920,117 @@ moduleFor(
       });
     }
 
-    // --- @retryWith tests ---
+    // --- automatic retry from tracked state ---
 
-    '@test @retryWith resets error state when value changes'() {
-      let state = new RetryState();
-
-      let ConditionalThrow = setComponentTemplate(
-        precompileTemplate('{{this.value}}'),
-        class extends GlimmerishComponent {
-          get value() {
-            if ((this as any).args.shouldThrow) {
-              throw new Error('route error');
-            }
-            return 'ok';
-          }
-        }
-      );
+    '@test recovers when state read by the failed initial render changes'() {
+      class State {
+        @tracked shouldThrow = true;
+      }
+      let state = new State();
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state }) }
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
         ),
         templateOnly()
       );
 
-      this.renderComponent(Root, { expect: 'ok' });
+      this.renderComponent(Root, { expect: 'caught' });
 
-      // Trigger error
       this.assertChange({
-        change: () => (state.shouldThrow = true),
-        expect: 'caught: route error',
-      });
-
-      // Change @retryWith value AND fix the error condition — boundary should reset
-      this.assertChange({
-        change: () => {
-          state.shouldThrow = false;
-          state.routeName = 'route-b';
-        },
+        change: () => (state.shouldThrow = false),
         expect: 'ok',
       });
     }
 
-    '@test @retryWith does not reset if value unchanged'() {
-      let state = new RetryState();
-
-      let ConditionalThrow = setComponentTemplate(
-        precompileTemplate('{{this.value}}'),
-        class extends GlimmerishComponent {
-          get value() {
-            if ((this as any).args.shouldThrow) {
-              throw new Error('route error');
-            }
-            return 'ok';
-          }
-        }
-      );
+    '@test recovers when state read by the failed rerender changes'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state }) }
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
         ),
         templateOnly()
       );
 
       this.renderComponent(Root, { expect: 'ok' });
 
-      // Trigger error
       this.assertChange({
         change: () => (state.shouldThrow = true),
         expect: 'caught',
       });
 
-      // Fix the throw condition but DON'T change @retryWith — should stay in error
       this.assertChange({
         change: () => (state.shouldThrow = false),
+        expect: 'ok',
+      });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
         expect: 'caught',
       });
     }
 
-    '@test @retryWith re-catches if new value also causes error'() {
-      let state = new RouteOnlyState();
+    '@test does not retry when state the failed render never read changes'(assert: Assert) {
+      class State {
+        @tracked label = 'a';
+      }
+      let state = new State();
+      let attempts = 0;
 
-      // Always throws regardless of route
+      let CountedThrow = setComponentTemplate(
+        precompileTemplate('{{this.boom}}'),
+        class extends GlimmerishComponent {
+          get boom(): never {
+            attempts++;
+            throw new Error('render error');
+          }
+        }
+      );
+
+      // The default block throws before it reaches `state.label`, so only the
+      // error block depends on it. Changing it must update the fallback
+      // without re-attempting the default block.
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+          '<ErrorBoundary><:default><CountedThrow />{{state.label}}</:default><:error>caught {{state.label}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, CountedThrow, state }) }
         ),
         templateOnly()
       );
 
-      this.renderComponent(Root, { expect: 'caught: render error' });
+      this.renderComponent(Root, { expect: 'caught a' });
+      assert.strictEqual(attempts, 1, 'default block attempted once on initial render');
 
-      // Change @retryWith — boundary resets, but immediately catches again
       this.assertChange({
-        change: () => (state.routeName = 'route-b'),
-        expect: 'caught: render error',
+        change: () => (state.label = 'b'),
+        expect: 'caught b',
       });
+      assert.strictEqual(attempts, 1, 'unrelated state change does not re-attempt');
     }
 
-    '@test @retryWith with retry that still throws re-catches'() {
-      let state = new RouteOnlyState();
+    '@test retries when state read before the throw changes, and re-catches if still failing'(
+      assert: Assert
+    ) {
+      class State {
+        @tracked count = 1;
+      }
+      let state = new State();
+      let attempts = 0;
 
-      // Always throws
-      let Root = setComponentTemplate(
-        precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.routeName}}><:default><Throwing /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state, on }) }
-        ),
-        templateOnly()
-      );
-
-      this.renderComponent(Root, { expect: 'caught <button>Retry</button>' });
-
-      // Retry while error still exists — should re-catch
-      this.assertChange({
-        change: () => clickElement('button'),
-        expect: 'caught <button>Retry</button>',
-      });
-    }
-
-    '@test @retryWith rerender error then retry without fixing re-catches'() {
-      let state = new RetryState();
-
-      let ConditionalThrow = setComponentTemplate(
+      let FailsWhilePositive = setComponentTemplate(
         precompileTemplate('{{this.value}}'),
         class extends GlimmerishComponent {
           get value() {
-            if ((this as any).args.shouldThrow) {
-              throw new Error('route error');
+            attempts++;
+            let count = (this as any).args.count;
+            if (count > 0) {
+              throw new Error(`count is ${count}`);
             }
             return 'ok';
           }
@@ -1072,8 +1039,40 @@ moduleFor(
 
       let Root = setComponentTemplate(
         precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, on }) }
+          '<ErrorBoundary><:default><FailsWhilePositive @count={{state.count}} /></:default><:error as |err|>caught: {{err.message}}</:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, FailsWhilePositive, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: count is 1' });
+      assert.strictEqual(attempts, 1);
+
+      this.assertChange({
+        change: () => (state.count = 2),
+        expect: 'caught: count is 2',
+      });
+      assert.strictEqual(attempts, 2, 'retried once and caught the new error');
+
+      this.assertChange({
+        change: () => (state.count = 0),
+        expect: 'ok',
+      });
+      assert.strictEqual(attempts, 3, 'retried once and recovered');
+    }
+
+    // --- manual retry ---
+
+    '@test rerender error then retry without fixing re-catches'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
         ),
         templateOnly()
       );
@@ -1090,46 +1089,6 @@ moduleFor(
       this.assertChange({
         change: () => clickElement('button'),
         expect: 'caught <button>Retry</button>',
-      });
-    }
-
-    '@test @retryWith with retry after fixing state recovers'() {
-      let state = new RetryState();
-
-      let ConditionalThrow = setComponentTemplate(
-        precompileTemplate('{{this.value}}'),
-        class extends GlimmerishComponent {
-          get value() {
-            if ((this as any).args.shouldThrow) {
-              throw new Error('route error');
-            }
-            return 'ok';
-          }
-        }
-      );
-
-      let Root = setComponentTemplate(
-        precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.routeName}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err retry|>caught <button {{on "click" retry}}>Retry</button></:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, on }) }
-        ),
-        templateOnly()
-      );
-
-      this.renderComponent(Root, { expect: 'ok' });
-
-      // Trigger error
-      this.assertChange({
-        change: () => (state.shouldThrow = true),
-        expect: 'caught <button>Retry</button>',
-      });
-
-      // Fix state and retry — should recover
-      state.shouldThrow = false;
-
-      this.assertChange({
-        change: () => clickElement('button'),
-        expect: 'ok',
       });
     }
 
@@ -1197,132 +1156,6 @@ moduleFor(
       this.assertChange({
         change: () => clickElement('button'),
         expect: 'ok',
-      });
-    }
-
-    '@test @retryWith with array value resets when element changes'() {
-      let state = new ArrayRetryState();
-
-      let ConditionalThrow = setComponentTemplate(
-        precompileTemplate('{{this.value}}'),
-        class extends GlimmerishComponent {
-          get value() {
-            if ((this as any).args.shouldThrow) {
-              throw new Error('route error');
-            }
-            return 'ok';
-          }
-        }
-      );
-
-      let Root = setComponentTemplate(
-        precompileTemplate(
-          '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, array }) }
-        ),
-        templateOnly()
-      );
-
-      this.renderComponent(Root, { expect: 'ok' });
-
-      // Trigger error
-      this.assertChange({
-        change: () => (state.shouldThrow = true),
-        expect: 'caught',
-      });
-
-      // Change one array element AND fix the error — should reset
-      this.assertChange({
-        change: () => {
-          state.shouldThrow = false;
-          state.valA = 'changed';
-        },
-        expect: 'ok',
-      });
-    }
-
-    '@test @retryWith with array value does not reset if elements unchanged'() {
-      let state = new ArrayRetryState();
-
-      let ConditionalThrow = setComponentTemplate(
-        precompileTemplate('{{this.value}}'),
-        class extends GlimmerishComponent {
-          get value() {
-            if ((this as any).args.shouldThrow) {
-              throw new Error('route error');
-            }
-            return 'ok';
-          }
-        }
-      );
-
-      let Root = setComponentTemplate(
-        precompileTemplate(
-          '<ErrorBoundary @retryWith={{array state.valA state.valB}}><:default><ConditionalThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, ConditionalThrow, state, array }) }
-        ),
-        templateOnly()
-      );
-
-      this.renderComponent(Root, { expect: 'ok' });
-
-      // Trigger error
-      this.assertChange({
-        change: () => (state.shouldThrow = true),
-        expect: 'caught',
-      });
-
-      // Fix throw condition but DON'T change array elements — should stay in error
-      this.assertChange({
-        change: () => (state.shouldThrow = false),
-        expect: 'caught',
-      });
-    }
-
-    '@test @retryWith with undefined value works without error'() {
-      let state = new ThrowOnlyState();
-
-      // @retryWith is not passed — tests that undefined/missing arg is handled
-      let Root = setComponentTemplate(
-        precompileTemplate(
-          '<ErrorBoundary @retryWith={{state.missing}}><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
-        ),
-        templateOnly()
-      );
-
-      this.renderComponent(Root, { expect: 'ok' });
-
-      // Trigger error — should still catch normally
-      this.assertChange({
-        change: () => (state.shouldThrow = true),
-        expect: 'caught',
-      });
-    }
-
-    '@test ErrorBoundary without @retryWith stays in error state'() {
-      let state = new ThrowOnlyState();
-
-      let Root = setComponentTemplate(
-        precompileTemplate(
-          '<ErrorBoundary><:default><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:default><:error as |err|>caught</:error></ErrorBoundary>',
-          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
-        ),
-        templateOnly()
-      );
-
-      this.renderComponent(Root, { expect: 'ok' });
-
-      // Trigger error
-      this.assertChange({
-        change: () => (state.shouldThrow = true),
-        expect: 'caught',
-      });
-
-      // Fix the condition — but without @retryWith, boundary stays in error
-      this.assertChange({
-        change: () => (state.shouldThrow = false),
-        expect: 'caught',
       });
     }
 
