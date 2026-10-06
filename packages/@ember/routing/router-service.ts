@@ -7,7 +7,8 @@ import { readOnly } from '@ember/object/computed';
 import Service from '@ember/service';
 import { consumeTag } from '@glimmer/validator/lib/tracking';
 import { tagFor } from '@glimmer/validator/lib/meta';
-import type { ModelFor, Transition } from 'router_js';
+import type { Transition } from 'router_js';
+import type { ModelFor } from '@ember/routing/route';
 import type Route from '@ember/routing/route';
 import EmberRouter from '@ember/routing/router';
 import type { RouteInfo, RouteInfoWithAttributes } from './lib/route-info';
@@ -695,11 +696,7 @@ class RouterService extends Service {
     assert(`The route "${pivotRouteName}" was not found`, this._router.hasRoute(pivotRouteName));
     assert(`The route "${pivotRouteName}" is currently not active`, this.isActive(pivotRouteName));
 
-    let owner = getOwner(this);
-    assert('RouterService is unexpectedly missing an owner', owner);
-    let pivotRoute = owner.lookup(`route:${pivotRouteName}`) as Route;
-
-    return this._router._routerMicrolib.refresh(pivotRoute);
+    return this._router._routerMicrolib.refresh(pivotRouteName);
   }
 
   /**
@@ -730,7 +727,7 @@ class RouterService extends Service {
     @public
   */
   @readOnly('_router.currentRouteName')
-  declare readonly currentRouteName: this['_router']['currentRouteName'];
+  readonly currentRouteName!: this['_router']['currentRouteName'];
 
   /**
    Current URL for the application.
@@ -759,7 +756,7 @@ class RouterService extends Service {
     @public
   */
   @readOnly('_router.currentURL')
-  declare readonly currentURL: this['_router']['currentURL'];
+  readonly currentURL!: this['_router']['currentURL'];
 
   /**
     The `location` property returns what implementation of the `location` API
@@ -798,7 +795,7 @@ class RouterService extends Service {
     @public
   */
   @readOnly('_router.location')
-  declare readonly location: this['_router']['location'];
+  readonly location!: this['_router']['location'];
 
   /**
     The `rootURL` property represents the URL of the root of
@@ -828,7 +825,7 @@ class RouterService extends Service {
     @public
   */
   @readOnly('_router.rootURL')
-  declare readonly rootURL: this['_router']['rootURL'];
+  readonly rootURL!: this['_router']['rootURL'];
 
   /**
     The `currentRoute` property contains metadata about the current leaf route.
@@ -845,13 +842,14 @@ class RouterService extends Service {
     ```gjs {data-filename="app/components/header.gjs"}
       import Component from '@glimmer/component';
       import { service } from '@ember/service';
-      import { notEmpty } from '@ember/object/computed';
 
       export default class extends Component {
         @service router;
 
-        @notEmpty('router.currentRoute.child') isChildRoute;
-      });
+        get isChildRoute() {
+          return Boolean(this.router.currentRoute?.child);
+        }
+      }
     ```
 
     @property currentRoute
@@ -859,7 +857,7 @@ class RouterService extends Service {
     @public
   */
   @readOnly('_router.currentRoute')
-  declare readonly currentRoute: this['_router']['currentRoute'];
+  readonly currentRoute!: this['_router']['currentRoute'];
 }
 
 export { RouterService as default, type RouteInfo, type RouteInfoWithAttributes };

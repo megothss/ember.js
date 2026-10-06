@@ -239,6 +239,9 @@ function packages() {
 
       // @handlebars/parser is a hidden dependency, not an explicit entrypoint
       '@handlebars/**',
+
+      // private helpers that must not become importable module paths
+      '@ember/array/lib/sort-compare.ts',
     ],
     cwd: 'packages',
   });
@@ -305,10 +308,14 @@ export function hiddenDependencies() {
     ).path,
     '@handlebars/parser': resolve(packageCache.appRoot, 'packages/@handlebars/parser/lib/index.js'),
     ...walkGlimmerDeps(['@glimmer/compiler']),
-    'decorator-transforms/runtime': resolve(
-      findFromProject('decorator-transforms').root,
-      'dist/runtime.js'
-    ),
+    ...(process.env.VITE_STABLE_DECORATORS
+      ? {}
+      : {
+          'decorator-transforms/runtime': resolve(
+            findFromProject('decorator-transforms').root,
+            'dist/runtime.js'
+          ),
+        }),
   };
 }
 

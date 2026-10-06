@@ -1,7 +1,11 @@
 import { ApplicationTestCase, ModuleBasedTestResolver, moduleFor } from 'internal-test-helpers';
 
 import { ENV } from '@ember/-internals/environment';
-import { Component as EmberComponent, setComponentManager } from '@ember/-internals/glimmer';
+import {
+  Component as EmberComponent,
+  renderComponent,
+  setComponentManager,
+} from '@ember/-internals/glimmer';
 import Component from '@glimmer/component';
 import type { InternalOwner } from '@ember/-internals/owner';
 import Route from '@ember/routing/route';
@@ -101,7 +105,7 @@ if (ENV._DEBUG_RENDER_TREE) {
             name: 'index',
             args: {
               positional: [],
-              named: { controller: this.controllerFor('index'), model: undefined },
+              named: { controller: this.controllerFor('index'), model: undefined, outlet: null },
             },
             instance: this.controllerFor('index'),
             bounds: this.elementBounds(this.element!),
@@ -1128,6 +1132,101 @@ if (ENV._DEBUG_RENDER_TREE) {
         ]);
       }
 
+      async '@test components rendered with renderComponent'() {
+        await this.visit('/');
+
+        let HelloWorld = setComponentTemplate(
+          precompileTemplate('Hello {{@name}}', { strictMode: true }),
+          templateOnly()
+        );
+        let Root = setComponentTemplate(
+          precompileTemplate('<HelloWorld @name="world" />', {
+            strictMode: true,
+            scope: () => ({ HelloWorld }),
+          }),
+          templateOnly()
+        );
+        let into = document.createElement('div');
+
+        let result = runTask(() => renderComponent(Root, { owner: this.owner, into }));
+
+        let roots = captureRenderTree(this.owner).filter((node) => node.type === 'component');
+
+        this.assertRenderNodes(
+          roots,
+          [
+            {
+              type: 'component',
+              name: '{ROOT}',
+              args: { positional: [], named: {} },
+              instance: null,
+              bounds: this.elementBounds(into),
+              children: [
+                {
+                  type: 'component',
+                  name: 'HelloWorld',
+                  args: { positional: [], named: { name: 'world' } },
+                  instance: null,
+                  bounds: this.elementBounds(into),
+                  children: [],
+                },
+              ],
+            },
+          ],
+          'root'
+        );
+
+        runTask(() => result.destroy());
+      }
+
+      async '@test components rendered with renderComponent and a different owner'() {
+        await this.visit('/');
+
+        let HelloWorld = setComponentTemplate(
+          precompileTemplate('Hello {{@name}}', { strictMode: true }),
+          templateOnly()
+        );
+        let Root = setComponentTemplate(
+          precompileTemplate('<HelloWorld @name="world" />', {
+            strictMode: true,
+            scope: () => ({ HelloWorld }),
+          }),
+          templateOnly()
+        );
+        let owner = {};
+        let into = document.createElement('div');
+
+        let result = runTask(() => renderComponent(Root, { owner, into }));
+
+        let roots = captureRenderTree(this.owner).filter((node) => node.type === 'component');
+
+        this.assertRenderNodes(
+          roots,
+          [
+            {
+              type: 'component',
+              name: '{ROOT}',
+              args: { positional: [], named: {} },
+              instance: null,
+              bounds: this.elementBounds(into),
+              children: [
+                {
+                  type: 'component',
+                  name: 'HelloWorld',
+                  args: { positional: [], named: { name: 'world' } },
+                  instance: null,
+                  bounds: this.elementBounds(into),
+                  children: [],
+                },
+              ],
+            },
+          ],
+          'root'
+        );
+
+        runTask(() => result.destroy());
+      }
+
       async '@test <Input> components'() {
         this.add(
           'template:application',
@@ -1553,23 +1652,15 @@ if (ENV._DEBUG_RENDER_TREE) {
       assertRenderTree(expected: ExpectedRenderNode[]): void {
         let actual = captureRenderTree(this.owner);
         let controller = this.controllerFor('application');
+        // The root outlet contributes no node.
         let wrapped: ExpectedRenderNode[] = [
           this.outlet({
             type: 'route-template',
-            name: '-top-level',
-            args: { positional: [], named: { controller: undefined, model: undefined } },
-            instance: undefined,
+            name: 'application',
+            args: { positional: [], named: { controller, model: undefined } },
+            instance: controller,
             bounds: this.elementBounds(this.element!),
-            children: [
-              this.outlet({
-                type: 'route-template',
-                name: 'application',
-                args: { positional: [], named: { controller, model: undefined } },
-                instance: controller,
-                bounds: this.elementBounds(this.element!),
-                children: expected,
-              }),
-            ],
+            children: expected,
           }),
         ];
 
@@ -1644,7 +1735,22 @@ if (ENV._DEBUG_RENDER_TREE) {
       }
 
       assertNamedArgs<T>(actual: T, expected: T, path: string) {
-        this.assert.deepEqual(actual, expected, path);
+        const allKeys = new Set([
+          ...Object.keys(actual as object),
+          ...Object.keys(expected as object),
+        ]);
+
+        for (let key of allKeys) {
+          let inExpected = key in (expected as object);
+          let inActual = key in (actual as object);
+
+          if (inExpected && inActual) {
+            // TODO we should probably not rely on qunit's version of deepEqual here but at least now we're not
+            // trying to print full render trees (32MB of string) to the browser unless the key exists in both
+            // places and is different
+            this.assert.deepEqual((actual as any)[key], (expected as any)[key], `${path}.${key}`);
+          }
+        }
       }
 
       assertPositionalArgs<T>(actual: T, expected: T, path: string) {

@@ -30,6 +30,7 @@ import type { SimpleDocument, SimpleElement } from '@simple-dom/interface';
 import { hasDOM } from '../../browser-environment';
 import { EmberEnvironmentDelegate } from './environment';
 import ResolverImpl from './resolver';
+import { renderers } from './renderers';
 import { EvaluationContextImpl } from '@glimmer/opcode-compiler/lib/program-context';
 
 export type IBuilder = (env: Environment, cursor: Cursor) => TreeBuilder;
@@ -118,6 +119,10 @@ export class ComponentRootState implements RendererRoot {
   }
 
   render(): void {
+    // A root can be destroyed before its first render, e.g. when it was added
+    // during a render transaction and destroyed before the transaction got to it.
+    if (isDestroying(this)) return;
+
     this.#render();
   }
 
@@ -133,8 +138,6 @@ export class ComponentRootState implements RendererRoot {
     return this.#result;
   }
 }
-
-const renderers: BaseRenderer[] = [];
 
 export function _resetRenderers() {
   renderers.length = 0;
@@ -239,6 +242,7 @@ export class RendererState {
   #destroyed = false;
   #roots: RendererRoot[] = [];
   #removedRoots: RendererRoot[] = [];
+  #registered = false;
 
   private constructor(data: RendererData, renderer: BaseRenderer) {
     this.#data = data;
@@ -286,9 +290,19 @@ export class RendererState {
     roots.push(root);
     associateDestroyableChild(this, root);
 
-    if (roots.length === 1) {
-      register(renderer);
-    }
+    // Destroying a root (e.g. via the `RenderResult` from `renderComponent`)
+    // must release it, otherwise the root -- and the renderer, which stays in
+    // the global `renderers` list while it has roots -- is retained forever.
+    registerDestructor(root, () => {
+      if (this.#inRenderTransaction) {
+        // `renderRoots` is iterating `roots`; let it remove this one.
+        if (!this.#removedRoots.includes(root)) this.#removedRoots.push(root);
+      } else {
+        this.#removeRoot(root, renderer);
+      }
+    });
+
+    this.#register(renderer);
 
     this.#renderRootsTransaction(renderer);
 
@@ -357,13 +371,33 @@ export class RendererState {
 
     // remove any roots that were destroyed during this transaction
     while (removedRoots.length) {
-      let root = removedRoots.pop();
+      this.#removeRoot(removedRoots.pop()!, renderer);
+    }
+  }
 
-      let rootIndex = roots.indexOf(root!);
+  #removeRoot(root: RendererRoot, renderer: BaseRenderer): void {
+    let roots = this.#roots;
+    let rootIndex = roots.indexOf(root);
+
+    if (rootIndex !== -1) {
       roots.splice(rootIndex, 1);
     }
 
-    if (this.#roots.length === 0) {
+    if (roots.length === 0) {
+      this.#deregister(renderer);
+    }
+  }
+
+  #register(renderer: BaseRenderer): void {
+    if (!this.#registered) {
+      this.#registered = true;
+      register(renderer);
+    }
+  }
+
+  #deregister(renderer: BaseRenderer): void {
+    if (this.#registered) {
+      this.#registered = false;
       deregister(renderer);
     }
   }
@@ -394,11 +428,7 @@ export class RendererState {
     this.#removedRoots.length = 0;
     this.#roots = [];
 
-    // if roots were present before destroying
-    // deregister this renderer instance
-    if (roots.length) {
-      deregister(renderer);
-    }
+    this.#deregister(renderer);
   }
 }
 
@@ -425,6 +455,15 @@ interface RenderCacheEntry {
    */
   glimmerResult: GlimmerRenderResult | undefined;
 }
+
+// Cursor descriptor isn't a stable enough reference.
+// Cursor fails during application teardown
+type RendererCacheKey = Element | SimpleElement;
+
+const isDOMElement = (into: IntoTarget): into is Element => 'innerHTML' in into;
+
+const cacheKey = (into: IntoTarget): RendererCacheKey =>
+  'element' in into ? (into as Cursor).element : (into as RendererCacheKey);
 
 function intoTarget(into: IntoTarget): Cursor {
   if ('element' in into) {
@@ -527,14 +566,17 @@ export function renderComponent(
    *
    * NOTE: destruction is async
    */
-  let existing = RENDER_CACHE.get(into);
-  existing?.result.destroy();
+  let key = cacheKey(into);
+  let existing = RENDER_CACHE.get(key);
+  if (existing?.glimmerResult) {
+    existing.result.destroy();
+  }
   /**
    * We can only replace the inner HTML the first time.
    * Because destruction is async, it won't be safe to
    * do this again, and we'll have to rely on the above destroy.
    */
-  if (!existing && into instanceof Element) {
+  if (!existing && isDOMElement(into)) {
     into.innerHTML = '';
   }
 
@@ -552,33 +594,46 @@ export function renderComponent(
    */
   let renderTarget: IntoTarget = into;
   if (existing?.glimmerResult) {
-    let parentElement =
-      into instanceof Element ? (into as unknown as SimpleElement) : (into as Cursor).element;
     let firstNode = existing.glimmerResult.firstNode();
-    renderTarget = { element: parentElement, nextSibling: firstNode };
+    renderTarget = { element: key as SimpleElement, nextSibling: firstNode };
   }
 
-  let innerResult = renderer.render(component, { into: renderTarget, args }).result;
+  let root = renderer.render(component, { into: renderTarget, args });
+  let innerResult = root.result;
+
+  // Destroying the root (rather than only its inner result) also removes it
+  // from the renderer, so nothing keeps it -- or `into` -- alive afterwards.
+  associateDestroyableChild(owner, root);
 
   if (innerResult) {
-    associateDestroyableChild(owner, innerResult);
+    registerDestructor(innerResult, () => {
+      if (RENDER_CACHE.get(key)?.glimmerResult === innerResult) {
+        RENDER_CACHE.delete(key);
+      }
+    });
   }
 
   let result: RenderResult = {
     destroy() {
-      if (innerResult) {
-        destroy(innerResult);
-      }
+      destroy(root);
     },
   };
 
-  RENDER_CACHE.set(into, { result, glimmerResult: innerResult });
+  RENDER_CACHE.set(key, { result, glimmerResult: innerResult });
 
   return result;
 }
 
-const RENDER_CACHE = new WeakMap<IntoTarget, RenderCacheEntry>();
+const RENDER_CACHE = new WeakMap<RendererCacheKey, RenderCacheEntry>();
 const RENDERER_CACHE = new WeakMap<object, BaseRenderer>();
+
+/**
+ * The application seeds its `renderer:-dom` service which allows for
+ * router-aware resolver to resolve {{mount}}
+ */
+export function setRenderer(owner: object, renderer: BaseRenderer): void {
+  RENDERER_CACHE.set(owner, renderer);
+}
 
 export class BaseRenderer {
   static strict(

@@ -122,7 +122,7 @@ export const DEPRECATIONS = {
   DEPRECATE_TARGET_ACTION_SUPPORT: deprecation({
     for: 'ember-source',
     id: 'deprecate-target-action-support',
-    since: { available: '7.3.0' },
+    since: { available: '7.3.0', enabled: '7.5.0' },
     until: '8.0.0',
     url: 'https://deprecations.emberjs.com/id/deprecate-target-action-support',
   }),
@@ -160,6 +160,13 @@ export const DEPRECATIONS = {
     since: { available: '7.4.0' },
     until: '8.0.0',
     url: 'https://deprecations.emberjs.com/id/deprecate-promise-proxy-mixin',
+  }),
+  DEPRECATE_EMBER_UTILS: deprecation({
+    id: 'deprecate-ember-utils',
+    for: 'ember-source',
+    since: { available: '7.5.0' },
+    until: '8.0.0',
+    url: 'https://deprecations.emberjs.com/id/deprecate-ember-utils',
   }),
 };
 

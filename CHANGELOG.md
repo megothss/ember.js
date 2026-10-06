@@ -1,6 +1,12 @@
 # Ember Changelog
 
-## v7.3.0-beta.1 (August 9, 2026)
+## v7.4.0-beta.1 (September 14, 2026)
+
+- [#21586](https://github.com/emberjs/ember.js/pull/21586) Update browser support per Ember's browser support policy (RFC #685). Support is now Support is now Chrome >= 109, Edge >= 149 Firefox >= 121, Safari >= 16.6, ChromeAndroid >= 151, FirefoxAndroid >= 153
+- [#21536](https://github.com/emberjs/ember.js/pull/21536) [DOC] Document the `key` option for `{{#each-in}}`
+- [#21571](https://github.com/emberjs/ember.js/pull/21571) Improve batch rendering performance by moving VM blocks out of the DESTRYABLE_META
+
+## v7.3.0 (September 14, 2026)
 
 - [#21471](https://github.com/emberjs/ember.js/pull/21471) [FEATURE] Overload tracked to be able to work outside of classes per [RFC #1071](https://rfcs.emberjs.com/id/1071-overload-tracked-for-non-class-use/).
 - [#21203](https://github.com/emberjs/ember.js/pull/21203) [BUGFIX] Fix `@model` becomes `undefined` or changes to the wrong route's model during Glimmer component willDestroy
@@ -10,12 +16,18 @@
 - [#21410](https://github.com/emberjs/ember.js/pull/21410) [BUGFIX] Fix query param redirects during active transitions
 - [#21521](https://github.com/emberjs/ember.js/pull/21521) [BUGFIX] Treat nullish LinkTo @query as an empty query object
 - [#21524](https://github.com/emberjs/ember.js/pull/21524) [BUGFIX] Allow CoreObject#init to be called with no arguments
+- [#21591](https://github.com/emberjs/ember.js/pull/21591) [BUGFIX] Destroy dynamic modifiers that were set after the initial render to fix a memory leak.
 - [#21523](https://github.com/emberjs/ember.js/pull/21523) [DOC] Document Set and Map support for {{each}} and {{each-in}}
+- [#21573](https://github.com/emberjs/ember.js/pull/21573) [DOC] Fix link to @ember/helper from Ember.Templates.helpers docs
 - [#21451](https://github.com/emberjs/ember.js/pull/21451) Block prototype traversal in set-path pollution guard
 - [#21456](https://github.com/emberjs/ember.js/pull/21456) Set sideEffects: false in package.json so that tree-shaking optimizes away unused ember-source code (hello-world is 42.5% smaller)
 - [#21462](https://github.com/emberjs/ember.js/pull/21462) Refactor so that small apps don't pull in the old renderer as well as some classic things
 - [#21496](https://github.com/emberjs/ember.js/pull/21496) Widen TS matrix
 - [#21515](https://github.com/emberjs/ember.js/pull/21515) Remove unused opcodes
+
+## v7.2.1 (September 14, 2026)
+
+- [#21591](https://github.com/emberjs/ember.js/pull/21591) [BUGFIX] Destroy dynamic modifiers that were set after the initial render to fix a memory leak. 
 
 ## v7.2.0 (August 9, 2026)
 

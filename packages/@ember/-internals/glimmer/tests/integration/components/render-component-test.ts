@@ -23,10 +23,14 @@ import GlimmerishComponent from '../../utils/glimmerish-component';
 import { run } from '@ember/runloop';
 import { destroy, associateDestroyableChild, registerDestructor } from '@glimmer/destroyable';
 import { renderComponent, type RenderResult } from '../../../lib/renderer';
+import { renderers } from '../../../lib/renderers';
 import { trackedObject } from '@ember/reactive/collections';
 import { cached, tracked } from '@glimmer/tracking';
 import Service, { service } from '@ember/service';
 import type Owner from '@ember/owner';
+import { ENV } from '@ember/-internals/environment';
+import { captureRenderTree } from '@ember/debug';
+import type { CapturedRenderNode } from '@glimmer/interfaces';
 
 class RenderComponentTestCase extends AbstractStrictTestCase {
   declare component: (RenderResult & { rerender: () => void }) | undefined;
@@ -119,8 +123,74 @@ moduleFor(
 
       assertHTML('');
     }
+
+    '@test captureRenderTree includes the rendered components'(assert: QUnit['assert']) {
+      let HelloWorld = setComponentTemplate(precompileTemplate('Hello, world!'), templateOnly());
+      let Root = setComponentTemplate(
+        precompileTemplate('<HelloWorld/>', { strictMode: true, scope: () => ({ HelloWorld }) }),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'Hello, world!' });
+
+      if (!ENV._DEBUG_RENDER_TREE) return;
+
+      assert.deepEqual(renderTreeNames(this.owner), ['{ROOT}', 'HelloWorld']);
+    }
+
+    '@test captureRenderTree includes components rendered with any owner'(assert: QUnit['assert']) {
+      let Owned = setComponentTemplate(precompileTemplate('owned'), templateOnly());
+      let Ownerless = setComponentTemplate(precompileTemplate('ownerless'), templateOnly());
+      let OwnedRoot = setComponentTemplate(
+        precompileTemplate('<Owned/>', { strictMode: true, scope: () => ({ Owned }) }),
+        templateOnly()
+      );
+      let OwnerlessRoot = setComponentTemplate(
+        precompileTemplate('<Ownerless/>', { strictMode: true, scope: () => ({ Ownerless }) }),
+        templateOnly()
+      );
+
+      let ownedElement = document.createElement('div');
+      let ownerlessElement = document.createElement('div');
+      this.element.append(ownedElement, ownerlessElement);
+
+      let results = run(() => [
+        renderComponent(OwnedRoot, { owner: this.owner, into: ownedElement }),
+        renderComponent(OwnerlessRoot, { into: ownerlessElement }),
+      ]);
+
+      assertHTML('<div>owned</div><div>ownerless</div>');
+
+      if (ENV._DEBUG_RENDER_TREE) {
+        assert.deepEqual(renderTreeNames(this.owner), ['{ROOT}', 'Owned', '{ROOT}', 'Ownerless']);
+      }
+
+      run(() => {
+        for (let result of results) {
+          result.destroy();
+        }
+      });
+
+      if (ENV._DEBUG_RENDER_TREE) {
+        assert.deepEqual(renderTreeNames(this.owner), [], 'destroyed renders are gone');
+      }
+
+      run(() => destroy(this));
+    }
   }
 );
+
+function renderTreeNames(owner: Owner): string[] {
+  let names: string[] = [];
+  let collect = (nodes: CapturedRenderNode[]) => {
+    for (let node of nodes) {
+      names.push(node.name);
+      collect(node.children);
+    }
+  };
+  collect(captureRenderTree(owner));
+  return names;
+}
 
 moduleFor(
   'Strict Mode - renderComponent (direct)',
@@ -411,6 +481,71 @@ moduleFor(
       );
 
       this.renderComponent(Root, { expect: '<div>hi there</div>' });
+    }
+
+    '@test destroying the result releases its root and renderer'(assert: QUnit['assert']) {
+      let render = defineSimpleModifier((element, [comp]) => {
+        let result = renderComponent(comp, { into: element });
+
+        return () => result.destroy();
+      });
+
+      let Inner = setComponentTemplate(precompileTemplate('hi there'), templateOnly());
+
+      class State {
+        @tracked show = true;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(`{{#if state.show}}<div {{render Inner}}></div>{{/if}}`, {
+          strictMode: true,
+          scope: () => ({ render, Inner, state }),
+        }),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<div>hi there</div>' });
+
+      let baseline = renderers.length;
+
+      for (let i = 0; i < 5; i++) {
+        run(() => (state.show = false));
+        assertHTML('<!---->');
+        run(() => (state.show = true));
+        assertHTML('<div>hi there</div>');
+      }
+
+      assert.strictEqual(
+        renderers.length,
+        baseline,
+        'renderers for destroyed renderComponent results are not retained'
+      );
+    }
+
+    '@test destroying the result removes its root from a shared renderer'(assert: QUnit['assert']) {
+      let Inner = setComponentTemplate(precompileTemplate('hi there'), templateOnly());
+      let { owner } = this;
+      let element = document.createElement('div');
+
+      let first = run(() => renderComponent(Inner, { owner, into: element }));
+      let renderer = renderers[renderers.length - 1]!;
+
+      assert.strictEqual(renderer.state.roots.length, 1);
+
+      for (let i = 0; i < 5; i++) {
+        let other = document.createElement('div');
+        let result = run(() => renderComponent(Inner, { owner, into: other }));
+        run(() => result.destroy());
+      }
+
+      assert.strictEqual(renderer.state.roots.length, 1, 'destroyed roots are not retained');
+
+      run(() => first.destroy());
+
+      assert.false(renderers.includes(renderer), 'renderer with no roots is deregistered');
+
+      run(() => destroy(this));
     }
 
     '@test can render in to a detached element'() {
