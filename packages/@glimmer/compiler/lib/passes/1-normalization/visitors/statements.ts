@@ -1,9 +1,10 @@
 import * as ASTv2 from '@glimmer/syntax/lib/v2/api';
+import { generateSyntaxError } from '@glimmer/syntax/lib/syntax-error';
 
 import type { NormalizationState } from '../context';
 
 import { OptionalList } from '../../../shared/list';
-import { Ok, Result, ResultArray } from '../../../shared/result';
+import { Err, Ok, Result, ResultArray } from '../../../shared/result';
 import * as mir from '../../2-encoding/mir';
 import { BLOCK_KEYWORDS } from '../keywords';
 import { APPEND_KEYWORDS } from '../keywords/append';
@@ -42,6 +43,14 @@ class NormalizationStatements {
   }
 
   InvokeBlock(node: ASTv2.InvokeBlock, state: NormalizationState): Result<mir.Statement> {
+    let catchBlock = node.blocks.get('catch');
+
+    // Checked before any keyword translates, so no other block keyword or
+    // component can quietly take or drop a `{{catch}}`.
+    if (catchBlock && !isTryKeyword(node.callee)) {
+      return Err(generateSyntaxError(`{{catch}} is only valid on {{#try}}`, node.loc));
+    }
+
     let translated = BLOCK_KEYWORDS.translate(node, state);
 
     if (translated !== null) {
@@ -143,3 +152,16 @@ class NormalizationStatements {
 }
 
 export const VISIT_STMTS = new NormalizationStatements();
+
+/**
+ * Whether a block's callee is the `try` keyword: a free `try` with no path
+ * segments, as opposed to a local, lexical or qualified value of that name.
+ */
+function isTryKeyword(callee: ASTv2.ExpressionNode): boolean {
+  return (
+    callee.type === 'Path' &&
+    callee.ref.type === 'Free' &&
+    callee.ref.name === 'try' &&
+    callee.tail.length === 0
+  );
+}

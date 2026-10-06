@@ -48,6 +48,7 @@ export type GetFreeAsComponentHeadOpcode = 39;
 export type InElementOpcode = 40;
 export type IfOpcode = 41;
 export type EachOpcode = 42;
+export type TryOpcode = 43;
 export type LetOpcode = 44;
 export type WithDynamicVarsOpcode = 45;
 export type InvokeComponentOpcode = 46;

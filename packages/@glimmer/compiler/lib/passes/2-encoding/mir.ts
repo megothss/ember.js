@@ -30,6 +30,11 @@ export class If extends node('If').fields<{
   inverse: NamedBlock | null;
 }>() {}
 
+export class Try extends node('Try').fields<{
+  block: NamedBlock;
+  catchBlock: NamedBlock | null;
+}>() {}
+
 export class IfInline extends node('IfInline').fields<{
   condition: ExpressionNode;
   truthy: ExpressionNode;
@@ -217,6 +222,7 @@ export type Statement =
   | InvokeBlock
   | AppendComment
   | If
+  | Try
   | Each
   | Let
   | WithDynamicVars
