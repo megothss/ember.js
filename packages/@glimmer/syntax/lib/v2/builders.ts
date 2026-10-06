@@ -295,11 +295,13 @@ export class Builder {
     {
       program,
       inverse = null,
+      inverseName = 'else',
       ...call
     }: {
       symbols: SymbolTable;
       program: ASTv2.Block;
       inverse?: ASTv2.Block | null;
+      inverseName?: 'else' | 'catch';
     } & CallParts,
     loc: SourceSpan
   ): ASTv2.InvokeBlock {
@@ -309,7 +311,7 @@ export class Builder {
     ];
     if (inverse) {
       blocksLoc = blocksLoc.extend(inverse.loc);
-      blocks.push(this.namedBlock(SourceSlice.synthetic('else'), inverse, inverse.loc));
+      blocks.push(this.namedBlock(SourceSlice.synthetic(inverseName), inverse, inverse.loc));
     }
 
     return new ASTv2.InvokeBlock({

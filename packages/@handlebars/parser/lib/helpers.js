@@ -144,7 +144,7 @@ export function prepareBlock(openBlock, program, inverseAndProgram, close, inver
 
   program.blockParams = openBlock.blockParams;
 
-  let inverse, inverseStrip;
+  let inverse, inverseStrip, catchClause;
 
   if (inverseAndProgram) {
     if (decorator) {
@@ -157,6 +157,14 @@ export function prepareBlock(openBlock, program, inverseAndProgram, close, inver
 
     inverseStrip = inverseAndProgram.strip;
     inverse = inverseAndProgram.program;
+
+    if (inverseAndProgram.catch) {
+      catchClause = inverseAndProgram.catch;
+
+      if (catchClause.params.length) {
+        inverse.blockParams = catchClause.params.map((param) => param.name);
+      }
+    }
   }
 
   if (inverted) {
@@ -165,7 +173,7 @@ export function prepareBlock(openBlock, program, inverseAndProgram, close, inver
     program = inverted;
   }
 
-  return {
+  let node = {
     type: decorator ? 'DecoratorBlock' : 'BlockStatement',
     path: openBlock.path,
     params: openBlock.params,
@@ -177,6 +185,44 @@ export function prepareBlock(openBlock, program, inverseAndProgram, close, inver
     closeStrip: close && close.strip,
     loc: this.locInfo(locInfo),
   };
+
+  if (catchClause) {
+    node.catch = catchClause;
+  }
+
+  return node;
+}
+
+const CATCH_TOKENS = ['CATCH', 'OPEN_CATCH_PARAMS'];
+
+/**
+ * Replaces jison's generic "Expecting ..." line for a misplaced `{{catch}}` or
+ * block params on a non-block mustache, and defers to jison's own handler for
+ * everything else so other messages stay byte-identical.
+ */
+export function parseError(str, hash) {
+  let message;
+
+  if (hash && CATCH_TOKENS.includes(hash.token)) {
+    message = hash.expected.includes("'OPEN_ENDBLOCK'")
+      ? 'Unexpected {{catch}}: it must directly follow the body of a {{#...}} block, and cannot appear after {{else}}, twice, or in an inverse {{^...}} block'
+      : 'Unexpected {{catch}} outside of a block';
+  } else if (
+    hash &&
+    hash.token === 'OPEN_BLOCK_PARAMS' &&
+    // Only `CLOSE` is expected right after a block header's own params, so a
+    // second `as |...|` group there keeps jison's message.
+    !(hash.expected.length === 1 && hash.expected[0] === "'CLOSE'")
+  ) {
+    message = 'Unexpected block params: "as |...|" is only allowed on block statements';
+  }
+
+  if (message) {
+    let index = str.lastIndexOf('\nExpecting ');
+    str = (index === -1 ? str : str.slice(0, index)) + '\n' + message;
+  }
+
+  return Object.getPrototypeOf(this).parseError.call(this, str, hash);
 }
 
 export function prepareProgram(statements, loc) {

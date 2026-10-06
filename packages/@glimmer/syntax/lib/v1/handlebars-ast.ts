@@ -116,6 +116,13 @@ export interface CommonBlock extends CommonNode {
 
 export interface BlockStatement extends CommonBlock {
   type: 'BlockStatement';
+  /** Present only when the inverse was written as `{{catch}}` instead of `{{else}}`. */
+  catch?: CatchClause;
+}
+
+export interface CatchClause {
+  loc: SourceLocation;
+  params: { name: string; loc: SourceLocation }[];
 }
 
 export interface DecoratorBlock extends CommonBlock {

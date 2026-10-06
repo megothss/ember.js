@@ -97,6 +97,8 @@ ID    [^\s!"#%-,\.\/;->@\[-\^`\{-~]+/{LOOKAHEAD}
 <mu>"{{"{LEFT_STRIP}?"/"         return 'OPEN_ENDBLOCK';
 <mu>"{{"{LEFT_STRIP}?"^"\s*{RIGHT_STRIP}?"}}"        this.popState(); return 'INVERSE';
 <mu>"{{"{LEFT_STRIP}?\s*"else"\s*{RIGHT_STRIP}?"}}"  this.popState(); return 'INVERSE';
+<mu>"{{"{LEFT_STRIP}?\s*"catch"\s*{RIGHT_STRIP}?"}}"  this.popState(); return 'CATCH';
+<mu>"{{"{LEFT_STRIP}?\s*"catch"\s+"as"\s+"|"  return 'OPEN_CATCH_PARAMS';
 <mu>"{{"{LEFT_STRIP}?"^"         return 'OPEN_INVERSE';
 <mu>"{{"{LEFT_STRIP}?\s*"else"   return 'OPEN_INVERSE_CHAIN';
 <mu>"{{"{LEFT_STRIP}?"{"         return 'OPEN_UNESCAPED';

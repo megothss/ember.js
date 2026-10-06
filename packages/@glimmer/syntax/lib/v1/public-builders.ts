@@ -61,7 +61,8 @@ function buildBlock(
   loc?: SourceLocation,
   openStrip?: ASTv1.StripFlags,
   inverseStrip?: ASTv1.StripFlags,
-  closeStrip?: ASTv1.StripFlags
+  closeStrip?: ASTv1.StripFlags,
+  isCatch?: boolean
 ): ASTv1.BlockStatement {
   let defaultBlock: ASTv1.Block;
   let elseBlock: Nullable<ASTv1.Block> = null;
@@ -100,6 +101,7 @@ function buildBlock(
     openStrip,
     inverseStrip,
     closeStrip,
+    isCatch,
   });
 }
 

@@ -105,6 +105,7 @@ class Builders {
     openStrip = DEFAULT_STRIP,
     inverseStrip = DEFAULT_STRIP,
     closeStrip = DEFAULT_STRIP,
+    isCatch = false,
   }: {
     path: ASTv1.PathExpression | ASTv1.SubExpression;
     params: ASTv1.Expression[];
@@ -115,8 +116,9 @@ class Builders {
     openStrip?: Optional<ASTv1.StripFlags>;
     inverseStrip?: Optional<ASTv1.StripFlags>;
     closeStrip?: Optional<ASTv1.StripFlags>;
+    isCatch?: Optional<boolean>;
   }): ASTv1.BlockStatement {
-    return {
+    let node: ASTv1.BlockStatement = {
       type: 'BlockStatement',
       path: path,
       params,
@@ -128,6 +130,12 @@ class Builders {
       inverseStrip,
       closeStrip,
     };
+
+    if (isCatch) {
+      node.catch = true;
+    }
+
+    return node;
   }
 
   comment({ value, loc }: { value: string; loc: SourceSpan }): ASTv1.CommentStatement {
