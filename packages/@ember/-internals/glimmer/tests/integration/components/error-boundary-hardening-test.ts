@@ -958,3 +958,73 @@ moduleFor(
     }
   }
 );
+
+moduleFor(
+  'ErrorBoundary [error-boundary-hardening] review 3 — initial failure in inserted each rows',
+  class extends ErrorBoundaryHardeningTestCase {
+    '@test a bad row inserted in the middle clears its initial partial DOM and preserves siblings'() {
+      this.assertInsertedRowFailure(['alpha', 'bad #1', 'beta', 'gamma']);
+    }
+
+    '@test a bad row prepended clears its initial partial DOM and preserves siblings'() {
+      this.assertInsertedRowFailure(['bad #1', 'alpha', 'beta', 'gamma']);
+    }
+
+    '@test a reorder inserting a bad row clears its initial partial DOM and preserves siblings'() {
+      this.assertInsertedRowFailure(['gamma', 'bad #1', 'beta', 'alpha']);
+    }
+
+    /** Insert a failing boundary at the list cursor, sharing a parent with existing rows. */
+    assertInsertedRowFailure(rows: string[]) {
+      class State {
+        @tracked rows = ['alpha', 'beta', 'gamma'];
+      }
+      let state = new State();
+      let RowItem = setComponentTemplate(
+        precompileTemplate('<span>{{this.label}}</span>'),
+        class extends GlimmerishComponent {
+          get label() {
+            let row = this.args.row as string;
+            if (row.startsWith('bad')) {
+              throw new Error(`${row} failed to render`);
+            }
+            return row;
+          }
+        }
+      );
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '{{#each state.rows key="@identity" as |row|}}<ErrorBoundary><:try><RowItem @row={{row}} /></:try><:catch as |err|><em>{{err.message}}</em></:catch></ErrorBoundary>{{/each}}',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state, RowItem }) }
+        ),
+        templateOnly()
+      );
+      this.renderComponent(Root, {
+        expect: '<span>alpha</span><span>beta</span><span>gamma</span>',
+      });
+      let siblings = Array.from(this.element.querySelectorAll('span'));
+
+      runTask(() => (state.rows = rows));
+
+      let expected = rows
+        .map((row) =>
+          row === 'bad #1' ? '<em>bad #1 failed to render</em>' : `<span>${row}</span>`
+        )
+        .join('');
+      this.assert.strictEqual(
+        this.element.innerHTML,
+        expected,
+        'the inserted row renders only its fallback, with no partial nodes and all siblings intact'
+      );
+      let survivingSiblings = Array.from(this.element.querySelectorAll('span'));
+      for (let sibling of siblings) {
+        this.assert.strictEqual(
+          survivingSiblings.find((node) => node.textContent === sibling.textContent),
+          sibling,
+          `${sibling.textContent} retains its original DOM node`
+        );
+      }
+      this.assertStableRerender();
+    }
+  }
+);

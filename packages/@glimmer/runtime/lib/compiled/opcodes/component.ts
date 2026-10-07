@@ -937,7 +937,10 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
 
   // Record insertion point so we can clean up partial DOM on error.
   let parent = block.parentElement();
-  let insertionMarker = parent.lastChild;
+  // The node before the insertion point. A boundary inside a newly inserted
+  // `{{#each}}` row renders before existing siblings, so the range to clean up
+  // ends at the insertion point, not at the end of the parent.
+  let insertionMarker = parentNextSibling ? parentNextSibling.previousSibling : parent.lastChild;
 
   // Save debug render tree depth so we can roll back stale entries on error.
   let renderTreeDepth = vm.env.debugRenderTree?.getDepth() ?? 0;
@@ -1003,13 +1006,10 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     // Roll back stale debug render tree entries from the failed render.
     vm.env.debugRenderTree?.rollbackTo(renderTreeDepth);
 
-    // Remove any partial DOM nodes inserted during the failed render.
-    // We can't use clear(block) because child bounds may be partially initialized.
-    // null end marker is safe here: during initial render, no sibling content
-    // has been rendered after this component yet, so removing from start to
-    // the end of the parent won't affect other nodes.
+    // Remove any partial DOM nodes inserted during the failed render. We can't
+    // use clear(block) because child bounds may be partially initialized.
     let start = insertionMarker ? insertionMarker.nextSibling : parent.firstChild;
-    clearDOMRange(parent, start, null);
+    clearDOMRange(parent, start, parentNextSibling);
 
     // Reset block to empty state for the retry render.
     block.resetPartial();
