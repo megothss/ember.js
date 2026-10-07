@@ -474,6 +474,9 @@ export class TryBlockOpcode extends TryOpcode {
       this.#abort();
 
       if (!this.#protecting) {
+        // The fallback itself failed: keep what it read for the boundary that
+        // catches the error, so that boundary retries when any of it changes.
+        consumeTag(failedTag);
         throw error;
       }
 
@@ -494,7 +497,7 @@ export class TryBlockOpcode extends TryOpcode {
     try {
       this.#attempt();
     } catch (fallbackError) {
-      unwindTrackingTo(depth);
+      consumeTag(unwindTrackingTo(depth));
       this.#abort();
       throw fallbackError;
     }

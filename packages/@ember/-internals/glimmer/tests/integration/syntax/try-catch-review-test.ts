@@ -17,6 +17,71 @@ import { BaseRenderer, setRenderer } from '../../../lib/renderer';
 import { TryCatchTestCase } from './try-catch-test';
 
 moduleFor(
+  'Syntax: {{#try}} [try-catch-runtime] review 3 — propagated fallback dependencies',
+  class extends TryCatchTestCase {
+    '@test outer recovery retains dependencies of a fallback failing in handleCaughtError'() {
+      this.assertFallbackDependencyRecovery(false);
+    }
+
+    '@test outer recovery retains dependencies of a fallback failing in handleException'() {
+      this.assertFallbackDependencyRecovery(true);
+    }
+
+    /** Repair only a dependency read by the failed fallback, leaving the body broken. */
+    assertFallbackDependencyRecovery(automaticRetry: boolean) {
+      class State {
+        @tracked phase = automaticRetry ? 1 : 0;
+        @tracked fallbackFails = false;
+      }
+      let state = new State();
+      let body = defineSimpleHelper((phase: unknown) => {
+        if (phase) throw new Error('body failure');
+        return 'body';
+      });
+      let boom = defineSimpleHelper(() => {
+        throw new Error('fallback failure');
+      });
+      let Fallback = setComponentTemplate(
+        precompileTemplate(
+          '<b>prefix</b>{{#if state.fallbackFails}}{{boom}}{{else}}inner recovered{{/if}}',
+          { strictMode: true, scope: () => ({ state, boom }) }
+        ),
+        templateOnly()
+      );
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<i>before</i>{{#try}}{{#try}}{{body state.phase}}{{catch as |e r|}}<Fallback />{{/try}}{{catch as |e r|}}outer caught {{e.message}}{{/try}}<i>after</i>',
+          { strictMode: true, scope: () => ({ state, body, Fallback }) }
+        ),
+        templateOnly()
+      );
+      this.renderComponent(Root, {
+        expect: automaticRetry
+          ? '<i>before</i><b>prefix</b>inner recovered<i>after</i>'
+          : '<i>before</i>body<i>after</i>',
+      });
+      this.assertChange({
+        change: () => {
+          state.phase = automaticRetry ? 2 : 1;
+          state.fallbackFails = true;
+        },
+        expect: '<i>before</i>outer caught fallback failure<i>after</i>',
+      });
+      this.assert.false(isInErrorBoundary(), 'propagation balances boundary depth');
+      this.assertChange({
+        change: () => (state.fallbackFails = false),
+        expect: '<i>before</i><b>prefix</b>inner recovered<i>after</i>',
+      });
+      this.assertChange({
+        change: () => (state.phase = 3),
+        expect: '<i>before</i><b>prefix</b>inner recovered<i>after</i>',
+      });
+      this.assert.false(isInErrorBoundary(), 'subsequent recovery balances boundary depth');
+    }
+  }
+);
+
+moduleFor(
   'Syntax: {{#try}} [try-catch-runtime] review',
   class extends TryCatchTestCase {
     /* eslint-disable no-console */
