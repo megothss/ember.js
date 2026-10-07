@@ -8,6 +8,7 @@ import type {
   GlimmerTreeConstruction,
   ModifierInstance,
   Nullable,
+  RenderAttempt,
   RuntimeArtifacts,
   RuntimeOptions,
   Transaction,
@@ -25,26 +26,89 @@ import { isArgumentError } from './vm/arguments';
 
 export const TRANSACTION: TransactionSymbol = Symbol('TRANSACTION') as TransactionSymbol;
 
+/** One `{{#try}}` attempt's queued work, as `[queue, item]` pairs. */
+class RenderAttemptImpl implements RenderAttempt {
+  readonly entries: [unknown[], unknown][] = [];
+}
+
 class TransactionImpl implements Transaction {
   public scheduledInstallModifiers: ModifierInstance[] = [];
   public scheduledUpdateModifiers: ModifierInstance[] = [];
   public createdComponents: ComponentInstanceWithCreate[] = [];
   public updatedComponents: ComponentInstanceWithCreate[] = [];
 
+  /**
+   * Open attempts, innermost last. `null` is a root render's barrier: work an
+   * independent root queues belongs to no enclosing attempt.
+   */
+  #attempts: Nullable<RenderAttemptImpl>[] = [];
+
   didCreate(component: ComponentInstanceWithCreate) {
-    this.createdComponents.push(component);
+    this.#queue(this.createdComponents, component);
   }
 
   didUpdate(component: ComponentInstanceWithCreate) {
-    this.updatedComponents.push(component);
+    this.#queue(this.updatedComponents, component);
   }
 
   scheduleInstallModifier(modifier: ModifierInstance) {
-    this.scheduledInstallModifiers.push(modifier);
+    this.#queue(this.scheduledInstallModifiers, modifier);
   }
 
   scheduleUpdateModifier(modifier: ModifierInstance) {
-    this.scheduledUpdateModifiers.push(modifier);
+    this.#queue(this.scheduledUpdateModifiers, modifier);
+  }
+
+  beginAttempt(): RenderAttemptImpl {
+    let attempt = new RenderAttemptImpl();
+    this.#attempts.push(attempt);
+    return attempt;
+  }
+
+  /** A successful attempt's work becomes its parent attempt's. */
+  commitAttempt(attempt: RenderAttemptImpl) {
+    if (this.#popAttempt(attempt)) {
+      this.#attempts.at(-1)?.entries.push(...attempt.entries);
+    }
+  }
+
+  abortAttempt(attempt: RenderAttemptImpl) {
+    if (this.#popAttempt(attempt)) {
+      for (let [queue, item] of attempt.entries) {
+        let index = queue.lastIndexOf(item);
+
+        if (index !== -1) {
+          queue.splice(index, 1);
+        }
+      }
+    }
+  }
+
+  beginRootRender() {
+    this.#attempts.push(null);
+  }
+
+  endRootRender() {
+    while (this.#attempts.length > 0 && this.#attempts.pop() !== null) {
+      // Attempts left open inside the root render are abandoned with it.
+    }
+  }
+
+  #queue<T>(queue: T[], item: T) {
+    queue.push(item);
+    this.#attempts.at(-1)?.entries.push([queue, item]);
+  }
+
+  /** Pops `attempt` and anything still open above it; false if it is not open. */
+  #popAttempt(attempt: RenderAttemptImpl): boolean {
+    let index = this.#attempts.lastIndexOf(attempt);
+
+    if (index === -1) {
+      return false;
+    }
+
+    this.#attempts.length = index;
+    return true;
   }
 
   commit() {
@@ -60,38 +124,63 @@ class TransactionImpl implements Transaction {
 
     let { scheduledInstallModifiers, scheduledUpdateModifiers } = this;
 
-    for (const { manager, state, definition } of scheduledInstallModifiers) {
-      let modifierTag = manager.getTag(state);
+    // Isolate each modifier install/update in a try-catch so that a single
+    // failing modifier does not prevent the remaining modifiers from being
+    // installed. Without this, all modifiers scheduled after the throwing one
+    // would be silently skipped, leaving their associated DOM elements without
+    // event listeners or other modifier behaviour. The first error encountered
+    // is re-thrown after all modifiers have been processed.
+    let firstError: unknown = null;
 
-      if (modifierTag !== null) {
-        let tag = track(
-          () => manager.install(state),
-          DEBUG &&
-            `- While rendering:\n  (instance of a \`${
-              definition.resolvedName || manager.getDebugName(definition.state)
-            }\` modifier)`
-        );
-        updateTag(modifierTag, tag);
-      } else {
-        manager.install(state);
+    for (const { manager, state, definition } of scheduledInstallModifiers) {
+      try {
+        let modifierTag = manager.getTag(state);
+
+        if (modifierTag !== null) {
+          let tag = track(
+            () => manager.install(state),
+            DEBUG &&
+              `- While rendering:\n  (instance of a \`${
+                definition.resolvedName || manager.getDebugName(definition.state)
+              }\` modifier)`
+          );
+          updateTag(modifierTag, tag);
+        } else {
+          manager.install(state);
+        }
+      } catch (e) {
+        if (firstError === null) {
+          firstError = e;
+        }
       }
     }
 
     for (const { manager, state, definition } of scheduledUpdateModifiers) {
-      let modifierTag = manager.getTag(state);
+      try {
+        let modifierTag = manager.getTag(state);
 
-      if (modifierTag !== null) {
-        let tag = track(
-          () => manager.update(state),
-          DEBUG &&
-            `- While rendering:\n  (instance of a \`${
-              definition.resolvedName || manager.getDebugName(definition.state)
-            }\` modifier)`
-        );
-        updateTag(modifierTag, tag);
-      } else {
-        manager.update(state);
+        if (modifierTag !== null) {
+          let tag = track(
+            () => manager.update(state),
+            DEBUG &&
+              `- While rendering:\n  (instance of a \`${
+                definition.resolvedName || manager.getDebugName(definition.state)
+              }\` modifier)`
+          );
+          updateTag(modifierTag, tag);
+        } else {
+          manager.update(state);
+        }
+      } catch (e) {
+        if (firstError === null) {
+          firstError = e;
+        }
       }
+    }
+
+    if (firstError !== null) {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      throw firstError;
     }
   }
 }
@@ -171,6 +260,26 @@ export class EnvironmentImpl implements Environment {
     if (this.isInteractive) {
       this.transaction.scheduleUpdateModifier(modifier);
     }
+  }
+
+  beginAttempt(): Nullable<RenderAttempt> {
+    return this[TRANSACTION]?.beginAttempt() ?? null;
+  }
+
+  commitAttempt(attempt: Nullable<RenderAttempt>) {
+    if (attempt) this[TRANSACTION]?.commitAttempt(attempt as RenderAttemptImpl);
+  }
+
+  abortAttempt(attempt: Nullable<RenderAttempt>) {
+    if (attempt) this[TRANSACTION]?.abortAttempt(attempt as RenderAttemptImpl);
+  }
+
+  beginRootRender() {
+    this[TRANSACTION]?.beginRootRender();
+  }
+
+  endRootRender() {
+    this[TRANSACTION]?.endRootRender();
   }
 
   commit() {

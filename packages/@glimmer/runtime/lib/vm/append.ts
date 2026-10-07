@@ -10,6 +10,8 @@ import type {
   DynamicScope,
   Environment,
   EvaluationContext,
+  ModifierInstance,
+  Nullable,
   Owner,
   Program,
   ProgramConstants,
@@ -25,7 +27,7 @@ import type { Reference } from '@glimmer/reference/lib/reference';
 import type { MachineRegister, Register, SyscallRegister } from '@glimmer/vm/lib/registers';
 import { dev, expect } from '@glimmer/debug-util/lib/platform-utils';
 import { unwrapHandle } from '@glimmer/debug-util/lib/template';
-import { associateDestroyableChild } from '@glimmer/destroyable';
+import { associateDestroyableChild, destroy } from '@glimmer/destroyable';
 import { DESTROYABLE_META_KEY } from '@glimmer/util/lib/destroyable-key';
 import { assertGlobalContextWasSet } from '@glimmer/global-context';
 import { LOCAL_DEBUG, LOCAL_TRACE_LOGGING } from '@glimmer/local-debug-flags';
@@ -34,7 +36,12 @@ import { UNDEFINED_REFERENCE } from '@glimmer/reference/lib/reference';
 import { reverse } from '@glimmer/util/lib/array-utils';
 import { StackImpl as Stack } from '@glimmer/util/lib/collections';
 import { LOCAL_LOGGER } from '@glimmer/util';
-import { beginTrackFrame, endTrackFrame, resetTracking } from '@glimmer/validator/lib/tracking';
+import {
+  beginTrackFrame,
+  endTrackFrame,
+  isInErrorBoundary,
+  resetTracking,
+} from '@glimmer/validator/lib/tracking';
 import { $pc, isLowLevelRegister } from '@glimmer/vm/lib/registers';
 
 import type { ScopeOptions } from '../scope';
@@ -737,6 +744,98 @@ export class VM {
   }
 
   /// EXECUTION
+
+  /**
+   * Execute the VM for an error boundary sub-VM. Unlike `execute`, this does
+   * NOT wrap in a tracking transaction or call `resetTracking()` on error,
+   * which would destroy the parent VM's tracking state. It only cleans up
+   * open blocks on error before re-throwing.
+   */
+  /**
+   * Execute the VM without resetting the parent's tracking state on error.
+   * Used by TryOpcode re-renders — popBlock/finalize inserts placeholder
+   * comments (<!---->), which is correct for conditional blocks.
+   */
+  executeGuarded(initialize?: (vm: this) => void): RenderResult {
+    try {
+      return this._execute(initialize);
+    } catch (e) {
+      if (isInErrorBoundary()) {
+        // A boundary recovers from this error and removes the DOM by range,
+        // so the destroyables this render created are unreachable otherwise.
+        destroy(this.#stacks.drop);
+      }
+
+      this.#releaseUnownedModifiers();
+      let elements = this.tree();
+      while (elements.hasBlocks) {
+        elements.popBlock();
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Execute the VM for an ErrorBoundary sub-VM. Unlike executeGuarded, this
+   * drops blocks without finalize (the DOM is discarded by the error boundary)
+   * and destroys the sub-VM's destroyable root to clean up RemoteBlocks.
+   */
+  executeErrorBoundary(initialize?: (vm: this) => void): RenderResult {
+    try {
+      return this._execute(initialize);
+    } catch (e) {
+      // Drop open blocks without finalizing — finalize() inserts placeholder
+      // comments, but the DOM is being discarded by the error boundary anyway.
+      this.tree().dropBlocks();
+      // Destroy the sub-VM's destroyable root to clean up any associated
+      // resources (e.g. RemoteBlocks from {{#in-element}}).
+      destroy(this.#stacks.drop);
+      this.#releaseUnownedModifiers();
+      throw e;
+    }
+  }
+
+  /**
+   * Modifiers created by a boundary attempt that are not yet owned by a
+   * destroyable. One is created while its element's attributes run and is only
+   * associated when the element closes; an attempt that throws in between must
+   * destroy it.
+   */
+  #unownedModifiers: Nullable<Set<ModifierInstance>> = null;
+
+  trackUnownedModifier(modifier: ModifierInstance): void {
+    if (isInErrorBoundary()) {
+      (this.#unownedModifiers ??= new Set()).add(modifier);
+    }
+  }
+
+  ownModifier(modifier: ModifierInstance): void {
+    this.#unownedModifiers?.delete(modifier);
+  }
+
+  #releaseUnownedModifiers(): void {
+    let modifiers = this.#unownedModifiers;
+    this.#unownedModifiers = null;
+
+    modifiers?.forEach(({ manager, state }) => {
+      let destroyable = manager.getDestroyable(state);
+
+      if (destroyable !== null) {
+        destroy(destroyable);
+      }
+
+      // The debug render tree entry, as `VM_CLOSE_ELEMENT_OP` would have
+      // associated it.
+      if (
+        this.env.debugRenderTree !== undefined &&
+        destroyable !== state &&
+        state !== null &&
+        (typeof state === 'object' || typeof state === 'function')
+      ) {
+        destroy(state);
+      }
+    });
+  }
 
   execute(initialize?: (vm: this) => void): RenderResult {
     if (DEBUG) {

@@ -131,6 +131,7 @@ const EMBERISH_CURLY_CAPABILITIES: InternalComponentCapabilities = {
   wrapped: true,
   willDestroy: true,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 export class EmberishCurlyComponentManager

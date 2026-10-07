@@ -87,6 +87,7 @@ const CAPABILITIES: InternalComponentCapabilities = {
   // Engines swap the owner at a mount point. Classic's business, not the
   // framework's: `render.owner` is the owner this level renders under.
   hasSubOwner: true,
+  errorBoundary: false,
 };
 
 interface OutletInstanceState {

@@ -170,6 +170,7 @@ const CAPABILITIES: InternalComponentCapabilities = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 class InternalManager

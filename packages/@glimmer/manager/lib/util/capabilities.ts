@@ -10,6 +10,7 @@ import type {
   DynamicScopeCapability,
   DynamicTagCapability,
   ElementHookCapability,
+  ErrorBoundaryCapability,
   Expand,
   HasSubOwnerCapability,
   InternalComponentCapability,
@@ -62,7 +63,8 @@ export function capabilityFlagsFrom(capabilities: CapabilityOptions): Capability
     capability(capabilities, 'createInstance') |
     capability(capabilities, 'wrapped') |
     capability(capabilities, 'willDestroy') |
-    capability(capabilities, 'hasSubOwner')) as CapabilityMask;
+    capability(capabilities, 'hasSubOwner') |
+    capability(capabilities, 'errorBoundary')) as CapabilityMask;
 }
 
 function capability(
@@ -99,7 +101,9 @@ export type InternalComponentCapabilityFor<C extends InternalComponentCapability
                           ? InternalComponentManager
                           : C extends HasSubOwnerCapability
                             ? WithSubOwner
-                            : never;
+                            : C extends ErrorBoundaryCapability
+                              ? InternalComponentManager
+                              : never;
 
 export function managerHasCapability<F extends InternalComponentCapability>(
   _manager: InternalComponentManager,

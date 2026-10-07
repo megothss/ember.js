@@ -30,6 +30,11 @@ export type ComponentInstanceWithCreate = ComponentInstance<
   WithCreateInstance
 >;
 
+/** An opaque handle for one `{{#try}}` attempt's queued lifecycle work. */
+export interface RenderAttempt {
+  readonly entries: unknown[];
+}
+
 export interface Environment {
   [TransactionSymbol]: Nullable<Transaction>;
 
@@ -41,6 +46,18 @@ export interface Environment {
 
   begin(): void;
   commit(): void;
+
+  /**
+   * Scopes the lifecycle work queued by one `{{#try}}` attempt, so a failed
+   * attempt can drop it. Returns `null` outside a transaction.
+   */
+  beginAttempt(): Nullable<RenderAttempt>;
+  commitAttempt(attempt: Nullable<RenderAttempt>): void;
+  abortAttempt(attempt: Nullable<RenderAttempt>): void;
+
+  /** Brackets an independent root render, whose work no enclosing attempt owns. */
+  beginRootRender(): void;
+  endRootRender(): void;
 
   getDOM(): GlimmerTreeChanges;
   getAppendOperations(): GlimmerTreeConstruction;

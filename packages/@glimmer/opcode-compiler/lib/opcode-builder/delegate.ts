@@ -18,6 +18,7 @@ export const DEFAULT_CAPABILITIES: InternalComponentCapabilities = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 export const MINIMAL_CAPABILITIES: InternalComponentCapabilities = {
@@ -34,6 +35,7 @@ export const MINIMAL_CAPABILITIES: InternalComponentCapabilities = {
   wrapped: false,
   willDestroy: false,
   hasSubOwner: false,
+  errorBoundary: false,
 };
 
 export interface ResolverDelegate<R = unknown> {

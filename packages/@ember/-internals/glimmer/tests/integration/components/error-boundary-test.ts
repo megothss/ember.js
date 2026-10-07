@@ -1,0 +1,1493 @@
+import {
+  AbstractStrictTestCase,
+  assertHTML,
+  buildOwner,
+  clickElement,
+  defineSimpleHelper,
+  defineSimpleModifier,
+  moduleFor,
+  runDestroy,
+} from 'internal-test-helpers';
+
+import { DEBUG } from '@glimmer/env';
+import { precompileTemplate } from '@ember/template-compilation';
+import templateOnly from '@ember/component/template-only';
+import { ErrorBoundary, setComponentManager } from '@ember/component';
+import { array, on } from '@glimmer/runtime';
+import { tracked } from '@glimmer/tracking';
+import GlimmerishComponent from '../../utils/glimmerish-component';
+
+import { run } from '@ember/runloop';
+import { associateDestroyableChild, destroy, registerDestructor } from '@glimmer/destroyable';
+import { componentCapabilities, setComponentTemplate } from '@glimmer/manager';
+import { renderComponent, type RenderResult } from '../../../lib/renderer';
+import type Owner from '@ember/owner';
+import { setOwner } from '@ember/-internals/owner';
+
+// --- Tracked state helpers ---
+// Declared at module level to avoid TS1206 "Decorators are not valid here"
+// which occurs with decorators inside anonymous class expressions.
+
+class ThrowOnlyState {
+  @tracked shouldThrow = false;
+}
+class SiblingState {
+  @tracked label = 'before';
+}
+class ConditionalState {
+  @tracked show = true;
+}
+class InnerState {
+  @tracked value = 'hello';
+}
+
+// --- Test helper components ---
+
+const Throwing = setComponentTemplate(
+  precompileTemplate('{{this.boom}}'),
+  class extends GlimmerishComponent {
+    get boom(): never {
+      throw new Error('render error');
+    }
+  }
+);
+
+const MaybeThrow = setComponentTemplate(
+  precompileTemplate('{{this.value}}'),
+  class extends GlimmerishComponent {
+    get value() {
+      if ((this as any).args.shouldThrow) {
+        throw new Error('conditional error');
+      }
+      return 'ok';
+    }
+  }
+);
+
+// --- Test case base class ---
+
+class ErrorBoundaryTestCase extends AbstractStrictTestCase {
+  declare component: (RenderResult & { rerender: () => void }) | undefined;
+  owner: Owner;
+
+  constructor(assert: QUnit['assert']) {
+    super(assert);
+    this.owner = buildOwner({});
+    associateDestroyableChild(this, this.owner);
+  }
+
+  get element() {
+    return document.querySelector('#qunit-fixture')!;
+  }
+
+  assertChange({ change, expect }: { change: () => void; expect: string }) {
+    run(() => change());
+    assertHTML(expect);
+    this.assertStableRerender();
+  }
+
+  renderComponent(component: object, options: { args?: Record<string, unknown>; expect: string }) {
+    let { owner } = this;
+
+    run(() => {
+      const result = renderComponent(component, {
+        owner,
+        args: options.args ?? {},
+        env: { document: document, isInteractive: true, hasDOM: true },
+        into: this.element,
+      });
+      this.component = {
+        ...result,
+        rerender() {
+          // unused, but asserted against
+        },
+      };
+      registerDestructor(this, () => result.destroy());
+    });
+
+    assertHTML(options.expect);
+    this.assertStableRerender();
+  }
+
+  /** Render `Root` and expect the DEBUG assertion about block combinations. */
+  assertBlocksAssertion(Root: object) {
+    (window as any).expectAssertion(() => {
+      run(() =>
+        renderComponent(Root, {
+          owner: this.owner,
+          env: { document: document, isInteractive: true, hasDOM: true },
+          into: this.element,
+        })
+      );
+    }, /<ErrorBoundary> accepts a <:default> block only on its own\. Use <:try> with <:catch>\./);
+  }
+}
+
+// --- Tests ---
+
+moduleFor(
+  'ErrorBoundary',
+  class extends ErrorBoundaryTestCase {
+    afterEach() {
+      runDestroy(this);
+    }
+
+    '@test renders default block when no error'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>hello</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+    }
+
+    // --- block names ---
+
+    '@test renders the <:try> block when no error'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>hello</:try><:catch>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+    }
+
+    '@test renders the <:catch> block with error and retry when <:try> throws'() {
+      class State {
+        @tracked shouldThrow = true;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught: {{err.message}} <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: conditional error <button>Retry</button>' });
+
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught: conditional error <button>Retry</button>',
+      });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'ok',
+      });
+    }
+
+    '@test <:catch> can come before <:try>'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:catch as |err|>caught: {{err.message}}</:catch><:try><Throwing /></:try></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: render error' });
+    }
+
+    '@test asserts when given both <:try> and <:default>'() {
+      this.assertBlocksAssertion(
+        setComponentTemplate(
+          precompileTemplate(
+            '<ErrorBoundary><:try>a</:try><:default>b</:default></ErrorBoundary>',
+            {
+              strictMode: true,
+              scope: () => ({ ErrorBoundary }),
+            }
+          ),
+          templateOnly()
+        )
+      );
+    }
+
+    '@test asserts when <:catch> is paired with <:default> instead of <:try>'() {
+      this.assertBlocksAssertion(
+        setComponentTemplate(
+          precompileTemplate(
+            '<ErrorBoundary><:default>a</:default><:catch>b</:catch></ErrorBoundary>',
+            {
+              strictMode: true,
+              scope: () => ({ ErrorBoundary }),
+            }
+          ),
+          templateOnly()
+        )
+      );
+    }
+
+    '@test catches error during initial render and shows error block'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught' });
+    }
+
+    /* eslint-disable no-console */
+    '@test logs caught error to console.error in DEBUG mode during initial render'(assert: Assert) {
+      if (!DEBUG) {
+        assert.expect(0);
+        return;
+      }
+
+      let originalConsoleError = console.error;
+      let errors: unknown[][] = [];
+      console.error = (...args: unknown[]) => errors.push(args);
+
+      try {
+        let Root = setComponentTemplate(
+          precompileTemplate(
+            '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+            { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+          ),
+          templateOnly()
+        );
+
+        this.renderComponent(Root, { expect: 'caught' });
+
+        assert.ok(errors.length > 0, 'console.error was called');
+        assert.strictEqual(
+          errors[0]![0],
+          'An error was caught by <ErrorBoundary>:',
+          'logs the expected message'
+        );
+        assert.ok(errors[0]![1] instanceof Error, 'logs the error object');
+        assert.strictEqual(
+          (errors[0]![1] as Error).message,
+          'render error',
+          'logs the correct error'
+        );
+      } finally {
+        console.error = originalConsoleError;
+      }
+    }
+
+    '@test logs caught error to console.error in DEBUG mode during rerender'(assert: Assert) {
+      if (!DEBUG) {
+        assert.expect(0);
+        return;
+      }
+
+      let originalConsoleError = console.error;
+      let errors: unknown[][] = [];
+
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Start capturing after initial render
+      console.error = (...args: unknown[]) => errors.push(args);
+
+      try {
+        this.assertChange({
+          change: () => (state.shouldThrow = true),
+          expect: 'caught',
+        });
+
+        assert.ok(errors.length > 0, 'console.error was called during rerender');
+        assert.strictEqual(
+          errors[0]![0],
+          'An error was caught by <ErrorBoundary>:',
+          'logs the expected message'
+        );
+        assert.strictEqual(
+          (errors[0]![1] as Error).message,
+          'conditional error',
+          'logs the correct error'
+        );
+      } finally {
+        console.error = originalConsoleError;
+      }
+    }
+    /* eslint-enable no-console */
+
+    '@test passes error object to error block'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: render error' });
+    }
+
+    '@test catches error during rerender'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+    }
+
+    '@test retry re-renders default content after error is fixed'() {
+      class State {
+        @tracked shouldThrow = true;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|><button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<button>Retry</button>' });
+
+      state.shouldThrow = false;
+
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test nested boundaries — inner catches, outer unaffected'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>outer ok <ErrorBoundary><:try><Throwing /></:try><:catch as |err|>inner caught</:catch></ErrorBoundary></:try><:catch as |err|>outer caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'outer ok inner caught' });
+    }
+
+    '@test renders nothing when no error block provided'() {
+      let Root = setComponentTemplate(
+        precompileTemplate('<ErrorBoundary><Throwing /></ErrorBoundary>', {
+          strictMode: true,
+          scope: () => ({ ErrorBoundary, Throwing }),
+        }),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<!---->' });
+    }
+
+    '@test tracked properties work after error recovery via retry'() {
+      class State {
+        @tracked shouldThrow = true;
+      }
+      let state = new State();
+
+      class CounterComponent extends GlimmerishComponent {
+        @tracked count = 0;
+        increment = () => this.count++;
+      }
+
+      let Counter = setComponentTemplate(
+        precompileTemplate(
+          '<span>{{this.count}}</span><button {{on "click" this.increment}}>+</button>',
+          { strictMode: true, scope: () => ({ on }) }
+        ),
+        CounterComponent
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /><Counter /></:try><:catch as |err retry|><button class="retry" {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, Counter, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<button class="retry">Retry</button>' });
+
+      state.shouldThrow = false;
+
+      this.assertChange({
+        change: () => clickElement('.retry'),
+        expect: 'ok<span>0</span><button>+</button>',
+      });
+
+      this.assertChange({
+        change: () => clickElement('button:not(.retry)'),
+        expect: 'ok<span>1</span><button>+</button>',
+      });
+    }
+
+    '@test sibling content survives error and recovery round-trip'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<span>before</span><ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary><span>after</span>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<span>before</span>caught<span>after</span>' });
+    }
+
+    '@test catches error from deeply nested grandchild component'() {
+      let Child = setComponentTemplate(
+        precompileTemplate('<Throwing />', { strictMode: true, scope: () => ({ Throwing }) }),
+        templateOnly()
+      );
+      let Parent = setComponentTemplate(
+        precompileTemplate('<Child />', { strictMode: true, scope: () => ({ Child }) }),
+        templateOnly()
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Parent /></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Parent }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: render error' });
+    }
+
+    '@test catches error from item in each loop'() {
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.item === 'bad') {
+              throw new Error('bad item');
+            }
+            return (this as any).args.item;
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#each (array "good" "bad" "also-good") as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, array }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: bad item' });
+    }
+
+    '@test helper throws during rerender when tracked state changes'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let maybeThrowHelper = defineSimpleHelper((shouldThrow: unknown) => {
+        if (shouldThrow) throw new Error('helper rerender error');
+        return 'helper ok';
+      });
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{maybeThrowHelper state.shouldThrow}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, maybeThrowHelper, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'helper ok' });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught: helper rerender error',
+      });
+    }
+
+    '@test catches error thrown by a helper'() {
+      let throwingHelper = defineSimpleHelper(() => {
+        throw new Error('helper error');
+      });
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{throwingHelper}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, throwingHelper }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: helper error' });
+    }
+
+    '@test modifiers install correctly inside error boundary'(assert: Assert) {
+      let trackingModifier = defineSimpleModifier((element: Element) => {
+        assert.step('modifier installed');
+        element.setAttribute('data-modified', 'true');
+      });
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><div {{trackingModifier}}>content</div></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, trackingModifier }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<div data-modified="true">content</div>' });
+      assert.verifySteps(['modifier installed']);
+    }
+
+    '@test computed properties and tracked dependencies work inside boundary'() {
+      class State {
+        @tracked firstName = 'Ada';
+        @tracked lastName = 'Lovelace';
+      }
+      let state = new State();
+
+      let FullName = setComponentTemplate(
+        precompileTemplate('{{this.fullName}}'),
+        class extends GlimmerishComponent {
+          get fullName() {
+            return `${(this as any).args.first} ${(this as any).args.last}`;
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><FullName @first={{state.firstName}} @last={{state.lastName}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, FullName, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'Ada Lovelace' });
+
+      this.assertChange({
+        change: () => (state.firstName = 'Grace'),
+        expect: 'Grace Lovelace',
+      });
+
+      this.assertChange({
+        change: () => (state.lastName = 'Hopper'),
+        expect: 'Grace Hopper',
+      });
+    }
+
+    '@test multiple sibling boundaries — one errors, other stays intact'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err|>first caught</:catch></ErrorBoundary><ErrorBoundary><:try>second ok</:try><:catch as |err|>second caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'first caughtsecond ok' });
+    }
+
+    '@test error boundary preserves error block across unrelated rerenders'() {
+      class State {
+        @tracked counter = 0;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<span>{{state.counter}}</span><ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<span>0</span>caught' });
+
+      this.assertChange({
+        change: () => state.counter++,
+        expect: '<span>1</span>caught',
+      });
+
+      this.assertChange({
+        change: () => state.counter++,
+        expect: '<span>2</span>caught',
+      });
+    }
+
+    '@test outer tracked state continues to work across boundary error transitions'() {
+      class State {
+        @tracked label = 'hello';
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<span>{{state.label}}</span><ErrorBoundary><:try><Throwing /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<span>hello</span>caught' });
+
+      this.assertChange({
+        change: () => (state.label = 'world'),
+        expect: '<span>world</span>caught',
+      });
+    }
+
+    '@test catches error from conditional branch during initial render'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#if true}}<Throwing />{{else}}safe{{/if}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: render error' });
+    }
+
+    '@test catches error when tracked array mutation causes throw during rerender'() {
+      class State {
+        @tracked items = ['a', 'b'];
+      }
+      let state = new State();
+
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.item === 'bomb') {
+              throw new Error('bomb item');
+            }
+            return (this as any).args.item;
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ab' });
+
+      this.assertChange({
+        change: () => (state.items = ['a', 'b', 'bomb']),
+        expect: 'caught: bomb item',
+      });
+    }
+
+    // Modifier errors are not caught by ErrorBoundary because modifiers install
+    // during transaction.commit(), which runs after VM execution completes.
+    // ErrorBoundary only catches errors during the VM render phase.
+    '@skip catches error thrown by a modifier'() {
+      let throwingModifier = defineSimpleModifier(() => {
+        throw new Error('modifier error');
+      });
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><div {{throwingModifier}}>content</div></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, throwingModifier }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: modifier error' });
+    }
+
+    '@test destructors are called when boundary transitions to error state'(assert: Assert) {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      // Use a component manager with destructor capability so the component
+      // instance enters the destroyable hierarchy. The default
+      // GlimmerishComponentManager has no destructor support, so
+      // registerDestructor on the component instance would never fire.
+      class DestroyableComponent {
+        args: any;
+        constructor(owner: any, args: any) {
+          setOwner(this, owner);
+          this.args = args;
+          registerDestructor(this, () => assert.step('destroyed'), true);
+        }
+
+        get value() {
+          if (this.args.shouldThrow) {
+            throw new Error('conditional error');
+          }
+          return 'alive';
+        }
+      }
+
+      setComponentManager(
+        () => ({
+          capabilities: componentCapabilities('3.13', { destructor: true }),
+          createComponent(Factory: any, args: any) {
+            return new Factory(undefined, args.named);
+          },
+          getContext(component: any) {
+            return component;
+          },
+          destroyComponent(component: any) {
+            destroy(component);
+          },
+        }),
+        DestroyableComponent
+      );
+
+      let Tracked = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        DestroyableComponent as any
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Tracked @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Tracked, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'alive' });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      assert.verifySteps(['destroyed']);
+    }
+
+    '@test retry that still throws shows error block again'() {
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Throwing /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught <button>Retry</button>' });
+
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+    }
+
+    '@test deeply nested components with conditionals — error in conditional branch'() {
+      class State {
+        @tracked showDanger = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#if state.showDanger}}<Throwing />{{else}}safe{{/if}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'safe' });
+
+      this.assertChange({
+        change: () => (state.showDanger = true),
+        expect: 'caught',
+      });
+    }
+
+    // --- Regression tests for tracking state corruption bugs ---
+
+    '@test rerender error then fix state and retry recovers'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error via rerender
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix state and retry — must not cause backtracking assertion
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test repeated rerender errors do not corrupt tracking state'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // First trigger
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Second trigger (same value — still dirties tag, causes revalidation)
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test error in error block fallback bubbles to parent boundary'() {
+      let ThrowingFallback = setComponentTemplate(
+        precompileTemplate('{{this.boom}}'),
+        class extends GlimmerishComponent {
+          get boom(): never {
+            throw new Error('fallback error');
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><ErrorBoundary><:try><Throwing /></:try><:catch as |err|><ThrowingFallback /></:catch></ErrorBoundary></:try><:catch as |err|>outer caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, ThrowingFallback }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'outer caught: fallback error' });
+    }
+
+    '@test each loop insert error then retry recovers'() {
+      class State {
+        @tracked items = ['a', 'b'];
+      }
+      let state = new State();
+
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.item === 'bomb') {
+              throw new Error('bomb');
+            }
+            return (this as any).args.item;
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ab' });
+
+      // Add bad item — triggers insertItem path
+      this.assertChange({
+        change: () => (state.items = ['a', 'b', 'bomb']),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry
+      state.items = ['a', 'b'];
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ab',
+      });
+    }
+
+    '@test each loop repeated insert errors then retry recovers'() {
+      class State {
+        @tracked items = ['a', 'b'];
+      }
+      let state = new State();
+
+      let ItemComponent = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
+          get value() {
+            if ((this as any).args.item === 'bomb') {
+              throw new Error('bomb');
+            }
+            return (this as any).args.item;
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#each state.items as |item|}}<ItemComponent @item={{item}} />{{/each}}</:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, ItemComponent, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ab' });
+
+      // First bad mutation
+      this.assertChange({
+        change: () => (state.items = ['a', 'b', 'bomb']),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Second bad mutation while in error state
+      this.assertChange({
+        change: () => (state.items = ['a', 'bomb', 'c']),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry
+      state.items = ['x', 'y'];
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'xy',
+      });
+    }
+
+    // --- automatic retry from tracked state ---
+
+    '@test recovers when state read by the failed initial render changes'() {
+      class State {
+        @tracked shouldThrow = true;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught' });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'ok',
+      });
+    }
+
+    '@test recovers when state read by the failed rerender changes'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = false),
+        expect: 'ok',
+      });
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+    }
+
+    '@test does not retry when state the failed render never read changes'(assert: Assert) {
+      class State {
+        @tracked label = 'a';
+      }
+      let state = new State();
+      let attempts = 0;
+
+      let CountedThrow = setComponentTemplate(
+        precompileTemplate('{{this.boom}}'),
+        class extends GlimmerishComponent {
+          get boom(): never {
+            attempts++;
+            throw new Error('render error');
+          }
+        }
+      );
+
+      // The default block throws before it reaches `state.label`, so only the
+      // error block depends on it. Changing it must update the fallback
+      // without re-attempting the default block.
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><CountedThrow />{{state.label}}</:try><:catch>caught {{state.label}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, CountedThrow, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught a' });
+      assert.strictEqual(attempts, 1, 'default block attempted once on initial render');
+
+      this.assertChange({
+        change: () => (state.label = 'b'),
+        expect: 'caught b',
+      });
+      assert.strictEqual(attempts, 1, 'unrelated state change does not re-attempt');
+    }
+
+    '@test retries when state read before the throw changes, and re-catches if still failing'(
+      assert: Assert
+    ) {
+      class State {
+        @tracked count = 1;
+      }
+      let state = new State();
+      let attempts = 0;
+
+      let FailsWhilePositive = setComponentTemplate(
+        precompileTemplate('{{this.value}}'),
+        class extends GlimmerishComponent {
+          get value() {
+            attempts++;
+            let count = (this as any).args.count;
+            if (count > 0) {
+              throw new Error(`count is ${count}`);
+            }
+            return 'ok';
+          }
+        }
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><FailsWhilePositive @count={{state.count}} /></:try><:catch as |err|>caught: {{err.message}}</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, FailsWhilePositive, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught: count is 1' });
+      assert.strictEqual(attempts, 1);
+
+      this.assertChange({
+        change: () => (state.count = 2),
+        expect: 'caught: count is 2',
+      });
+      assert.strictEqual(attempts, 2, 'retried once and caught the new error');
+
+      this.assertChange({
+        change: () => (state.count = 0),
+        expect: 'ok',
+      });
+      assert.strictEqual(attempts, 3, 'retried once and recovered');
+    }
+
+    // --- manual retry ---
+
+    '@test rerender error then retry without fixing re-catches'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // Trigger error via tracked state change
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Retry WITHOUT fixing state — error should be re-caught
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+    }
+
+    '@test multiple error-recovery cycles do not require extra retry clicks'() {
+      class State {
+        @tracked shouldThrow = false;
+      }
+      let state = new State();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><MaybeThrow @shouldThrow={{state.shouldThrow}} /></:try><:catch as |err retry|>caught <button {{on "click" retry}}>Retry</button></:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, state, on }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ok' });
+
+      // --- Cycle 1: error → retry without fixing → re-catch → fix → retry → recover ---
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Retry without fixing — should re-catch
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry — should recover
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+
+      // --- Cycle 2: same sequence, should still recover in same number of clicks ---
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Retry without fixing — should re-catch
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      // Fix and retry — should recover (NOT require extra clicks)
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+
+      // --- Cycle 3: one more to be sure ---
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught <button>Retry</button>',
+      });
+
+      state.shouldThrow = false;
+      this.assertChange({
+        change: () => clickElement('button'),
+        expect: 'ok',
+      });
+    }
+
+    '@test sibling content after ErrorBoundary updates correctly'() {
+      let state = new SiblingState();
+
+      let Sibling = setComponentTemplate(
+        precompileTemplate('{{state.label}}', { strictMode: true, scope: () => ({ state }) }),
+        templateOnly()
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>content</:try><:catch as |err|>caught</:catch></ErrorBoundary><Sibling />',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Sibling }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'contentbefore' });
+
+      // Changing tracked state on sibling should not crash.
+      // Without the block stack fix, the ErrorBoundary's orphaned AppendingBlock
+      // corrupts the sibling's bounds, causing a crash in clear() during re-render.
+      this.assertChange({
+        change: () => (state.label = 'after'),
+        expect: 'contentafter',
+      });
+    }
+
+    '@test component inside ErrorBoundary re-renders with sibling content after'() {
+      let state = new InnerState();
+      let siblingState = new SiblingState();
+      let Inner = setComponentTemplate(
+        precompileTemplate('{{state.value}}', { strictMode: true, scope: () => ({ state }) }),
+        templateOnly()
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Inner /></:try><:catch as |err|>caught</:catch></ErrorBoundary><span>{{siblingState.label}}</span>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Inner, siblingState }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello<span>before</span>' });
+
+      // Re-render inside EB content — without the cursor fix, this inverts
+      // the parent block's bounds (firstNode after lastNode in DOM order).
+      this.assertChange({
+        change: () => (state.value = 'world'),
+        expect: 'world<span>before</span>',
+      });
+
+      // Re-render sibling — verifies bounds are correct after EB content changed.
+      this.assertChange({
+        change: () => (siblingState.label = 'after'),
+        expect: 'world<span>after</span>',
+      });
+    }
+
+    '@test tracked state inside ErrorBoundary content updates'() {
+      let state = new InnerState();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{state.value}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+
+      this.assertChange({
+        change: () => (state.value = 'world'),
+        expect: 'world',
+      });
+    }
+
+    '@test ErrorBoundary inside conditional that toggles'() {
+      let state = new ConditionalState();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '{{#if state.show}}<ErrorBoundary><:try>content</:try><:catch as |err|>caught</:catch></ErrorBoundary>{{/if}}',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'content' });
+
+      this.assertChange({
+        change: () => (state.show = false),
+        expect: '<!---->',
+      });
+
+      this.assertChange({
+        change: () => (state.show = true),
+        expect: 'content',
+      });
+    }
+
+    '@test ErrorBoundary and sibling in conditional block re-render'() {
+      let state = new SiblingState();
+      let cond = new ConditionalState();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '{{#if cond.show}}<ErrorBoundary><:try>eb</:try><:catch as |err|>caught</:catch></ErrorBoundary>{{state.label}}{{/if}}',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state, cond }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'ebbefore' });
+
+      this.assertChange({
+        change: () => (state.label = 'after'),
+        expect: 'ebafter',
+      });
+    }
+
+    '@test ErrorBoundary wrapping component with tracked state'() {
+      let state = new InnerState();
+      let Inner = setComponentTemplate(
+        precompileTemplate('{{state.value}}', { strictMode: true, scope: () => ({ state }) }),
+        templateOnly()
+      );
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try><Inner /></:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Inner }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+
+      this.assertChange({
+        change: () => (state.value = 'world'),
+        expect: 'world',
+      });
+    }
+
+    '@test catches error inside {{#in-element}} during initial render and cleans up remote DOM'() {
+      let fixture = document.querySelector('#qunit-fixture')!;
+      let remote = document.createElement('div');
+      remote.id = 'eb-remote-target-1';
+      fixture.appendChild(remote);
+
+      let getRemote = defineSimpleHelper(() => remote);
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#in-element (getRemote) insertBefore=null}}<Throwing/>{{/in-element}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, Throwing, getRemote }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'caught' });
+
+      // Remote element should be completely empty — no DOM nodes at all.
+      this.assert.strictEqual(
+        remote.innerHTML,
+        '',
+        'remote element should be completely empty after error'
+      );
+    }
+
+    '@test catches rerender error and cleans up {{#in-element}} remote DOM'() {
+      let fixture = document.querySelector('#qunit-fixture')!;
+      let remote = document.createElement('div');
+      remote.id = 'eb-remote-target-2';
+      fixture.appendChild(remote);
+
+      let getRemote = defineSimpleHelper(() => remote);
+      let state = new ThrowOnlyState();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{#in-element (getRemote) insertBefore=null}}<MaybeThrow @shouldThrow={{state.shouldThrow}}/>{{/in-element}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, MaybeThrow, getRemote, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: '<!---->' });
+
+      // Remote element should have content from successful render
+      this.assert.strictEqual(remote.textContent, 'ok', 'remote element has content before error');
+
+      this.assertChange({
+        change: () => (state.shouldThrow = true),
+        expect: 'caught',
+      });
+
+      // Remote element should be completely empty — no DOM nodes at all.
+      this.assert.strictEqual(
+        remote.innerHTML,
+        '',
+        'remote element should be completely empty after error'
+      );
+    }
+
+    '@test multiple re-renders of ErrorBoundary content'() {
+      let state = new InnerState();
+
+      let Root = setComponentTemplate(
+        precompileTemplate(
+          '<ErrorBoundary><:try>{{state.value}}</:try><:catch as |err|>caught</:catch></ErrorBoundary>',
+          { strictMode: true, scope: () => ({ ErrorBoundary, state }) }
+        ),
+        templateOnly()
+      );
+
+      this.renderComponent(Root, { expect: 'hello' });
+
+      this.assertChange({
+        change: () => (state.value = 'one'),
+        expect: 'one',
+      });
+
+      this.assertChange({
+        change: () => (state.value = 'two'),
+        expect: 'two',
+      });
+
+      this.assertChange({
+        change: () => (state.value = 'three'),
+        expect: 'three',
+      });
+    }
+  }
+);

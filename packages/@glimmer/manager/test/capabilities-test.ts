@@ -20,8 +20,9 @@ QUnit.test('encodes a capabilities object into a bitmap', (assert) => {
       wrapped: false,
       willDestroy: false,
       hasSubOwner: false,
+      errorBoundary: false,
     }),
-    0b0000000000000,
+    0b00000000000000,
     'empty capabilities'
   );
 
@@ -40,8 +41,9 @@ QUnit.test('encodes a capabilities object into a bitmap', (assert) => {
       wrapped: true,
       willDestroy: true,
       hasSubOwner: true,
+      errorBoundary: true,
     }),
-    0b1111111111111,
+    0b11111111111111,
     'all capabilities'
   );
 
@@ -60,8 +62,9 @@ QUnit.test('encodes a capabilities object into a bitmap', (assert) => {
       wrapped: true,
       willDestroy: false,
       hasSubOwner: false,
+      errorBoundary: false,
     }),
-    0b0010100100101,
+    0b00010100100101,
     'random sample'
   );
 });
@@ -81,6 +84,7 @@ QUnit.test('allows querying bitmap for a capability', (assert) => {
     wrapped: true,
     willDestroy: false,
     hasSubOwner: false,
+    errorBoundary: false,
   });
 
   assert.true(

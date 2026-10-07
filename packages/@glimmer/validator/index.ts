@@ -31,10 +31,13 @@ export {
   createCache,
   endTrackFrame,
   endUntrackFrame,
+  getTrackingDepth,
   getValue,
   isConst,
   isTracking,
   resetTracking,
+  restoreTrackingTo,
+  unwindTrackingTo,
   track,
   untrack,
 } from './lib/tracking';

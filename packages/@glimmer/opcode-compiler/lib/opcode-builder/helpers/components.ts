@@ -23,6 +23,7 @@ import {
   VM_GET_COMPONENT_LAYOUT_OP,
   VM_GET_COMPONENT_SELF_OP,
   VM_GET_COMPONENT_TAG_NAME_OP,
+  VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP,
   VM_INVOKE_COMPONENT_LAYOUT_OP,
   VM_JUMP_UNLESS_OP,
   VM_LOAD_OP,
@@ -197,7 +198,9 @@ function InvokeStaticComponent(
 ): void {
   let { symbolTable } = layout;
 
-  let bailOut = hasCapability(capabilities, InternalComponentCapabilities.prepareArgs);
+  let bailOut =
+    hasCapability(capabilities, InternalComponentCapabilities.prepareArgs) ||
+    hasCapability(capabilities, InternalComponentCapabilities.errorBoundary);
 
   if (bailOut) {
     InvokeNonStaticComponent(op, {
@@ -395,17 +398,24 @@ export function InvokeNonStaticComponent(
   CompileArgs(op, positional, named, blocks, atNames);
   op(VM_PREPARE_ARGS_OP, $s0);
 
-  invokePreparedComponent(op, blocks.has('default'), bindableBlocks, bindableAtNames, () => {
-    if (layout) {
-      op(VM_PUSH_SYMBOL_TABLE_OP, symbolTableOperand(layout.symbolTable));
-      op(VM_CONSTANT_OP, layoutOperand(layout));
-      op(VM_COMPILE_BLOCK_OP);
-    } else {
-      op(VM_GET_COMPONENT_LAYOUT_OP, $s0);
-    }
+  invokePreparedComponent(
+    op,
+    blocks.has('default'),
+    bindableBlocks,
+    bindableAtNames,
+    () => {
+      if (layout) {
+        op(VM_PUSH_SYMBOL_TABLE_OP, symbolTableOperand(layout.symbolTable));
+        op(VM_CONSTANT_OP, layoutOperand(layout));
+        op(VM_COMPILE_BLOCK_OP);
+      } else {
+        op(VM_GET_COMPONENT_LAYOUT_OP, $s0);
+      }
 
-    op(VM_POPULATE_LAYOUT_OP, $s0);
-  });
+      op(VM_POPULATE_LAYOUT_OP, $s0);
+    },
+    capabilities
+  );
 
   op(VM_LOAD_OP, $s0);
 }
@@ -443,7 +453,8 @@ export function invokePreparedComponent(
   hasBlock: boolean,
   bindableBlocks: boolean,
   bindableAtNames: boolean,
-  populateLayout: Nullable<() => void> = null
+  populateLayout: Nullable<() => void> = null,
+  capabilities: CapabilityMask | true = true
 ): void {
   op(VM_BEGIN_COMPONENT_TRANSACTION_OP, $s0);
   op(VM_PUSH_DYNAMIC_SCOPE_OP);
@@ -469,7 +480,16 @@ export function invokePreparedComponent(
   if (bindableBlocks) op(VM_SET_BLOCKS_OP, $s0);
 
   op(VM_POP_OP, 1);
-  op(VM_INVOKE_COMPONENT_LAYOUT_OP, $s0);
+
+  if (
+    capabilities !== true &&
+    hasCapability(capabilities, InternalComponentCapabilities.errorBoundary)
+  ) {
+    op(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, $s0);
+  } else {
+    op(VM_INVOKE_COMPONENT_LAYOUT_OP, $s0);
+  }
+
   op(VM_DID_RENDER_LAYOUT_OP, $s0);
   op(VM_POP_FRAME_OP);
 

@@ -106,6 +106,12 @@ export interface InternalComponentCapabilities {
    * used for engines.
    */
   hasSubOwner: boolean;
+
+  /**
+   * Whether this component acts as an error boundary, catching errors thrown
+   * during rendering of its children and displaying fallback UI.
+   */
+  errorBoundary: boolean;
 }
 
 /**
@@ -126,6 +132,7 @@ export type CreateInstanceCapability = 0b0001000000000;
 export type WrappedCapability = 0b0010000000000;
 export type WillDestroyCapability = 0b0100000000000;
 export type HasSubOwnerCapability = 0b1000000000000;
+export type ErrorBoundaryCapability = 0b10000000000000;
 
 export type InternalComponentCapability =
   | EmptyCapability
@@ -141,7 +148,8 @@ export type InternalComponentCapability =
   | CreateInstanceCapability
   | WrappedCapability
   | WillDestroyCapability
-  | HasSubOwnerCapability;
+  | HasSubOwnerCapability
+  | ErrorBoundaryCapability;
 
 ////////////
 
