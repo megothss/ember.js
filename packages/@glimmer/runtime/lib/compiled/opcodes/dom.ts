@@ -52,6 +52,7 @@ import type { DynamicAttribute } from '../../vm/attributes/dynamic';
 import { isCurriedType, resolveCurriedValue } from '../../curried-value';
 import { APPEND_OPCODES } from '../../opcodes';
 import { createCapturedArgs } from '../../vm/arguments';
+import { trackRemoteBlock } from '../../vm/update';
 import { CheckArguments, CheckOperations, CheckReference } from './-debug-strip';
 import { Assert } from './vm';
 
@@ -91,6 +92,7 @@ APPEND_OPCODES.add(VM_PUSH_REMOTE_ELEMENT_OP, (vm) => {
 
   let block = vm.tree().pushRemoteElement(element, guid, insertBefore);
   vm.associateDestroyable(block);
+  trackRemoteBlock(block);
 
   if (vm.env.debugRenderTree !== undefined) {
     // Note that there is nothing to update – when the args for an
@@ -140,6 +142,7 @@ APPEND_OPCODES.add(VM_CLOSE_ELEMENT_OP, (vm) => {
 
   if (modifiers !== null) {
     modifiers.forEach((modifier) => {
+      vm.ownModifier(modifier);
       vm.env.scheduleInstallModifier(modifier);
       const { state } = modifier;
       const d = modifier.manager.getDestroyable(state);
@@ -194,6 +197,7 @@ APPEND_OPCODES.add(VM_MODIFIER_OP, (vm, { op1: handle }) => {
     'BUG: ElementModifier could not find operations to append to'
   );
 
+  vm.trackUnownedModifier(instance);
   operations.addModifier(vm, instance, capturedArgs);
 
   let tag = manager.getTag(state);
@@ -299,6 +303,7 @@ APPEND_OPCODES.add(VM_DYNAMIC_MODIFIER_OP, (vm) => {
       'BUG: ElementModifier could not find operations to append to'
     );
 
+    vm.trackUnownedModifier(instance);
     operations.addModifier(vm, instance, capturedArgs);
 
     tag = instance.manager.getTag(instance.state);

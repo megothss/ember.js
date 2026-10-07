@@ -8,29 +8,47 @@ import type {
   ExceptionHandler,
   GlimmerTreeChanges,
   Nullable,
+  RenderAttempt,
   ResettableBlock,
   Scope,
   SimpleComment,
+  SimpleNode,
+  Tag,
   UpdatingOpcode,
   UpdatingVM as IUpdatingVM,
 } from '@glimmer/interfaces';
 import type { OpaqueIterationItem, OpaqueIterator } from '@glimmer/reference/lib/iterable';
 import type { Reference } from '@glimmer/reference/lib/reference';
 import { expect, unwrap } from '@glimmer/debug-util/lib/platform-utils';
-import { associateDestroyableChild, destroy, destroyChildren } from '@glimmer/destroyable';
+import {
+  associateDestroyableChild,
+  destroy,
+  destroyChildren,
+  registerDestructor,
+} from '@glimmer/destroyable';
 import { DESTROYABLE_META_KEY } from '@glimmer/util/lib/destroyable-key';
 import { LOCAL_DEBUG } from '@glimmer/local-debug-flags';
 import { updateRef, valueForRef } from '@glimmer/reference/lib/reference';
 import { logStep } from '@glimmer/util/lib/debug-steps';
 import { StackImpl as Stack } from '@glimmer/util/lib/collections';
 import { debug } from '@glimmer/validator/lib/debug';
-import { resetTracking } from '@glimmer/validator/lib/tracking';
+import {
+  beginErrorBoundary,
+  beginTrackFrame,
+  consumeTag,
+  endErrorBoundary,
+  endTrackFrame,
+  getTrackingDepth,
+  resetTracking,
+  unwindTrackingTo,
+} from '@glimmer/validator/lib/tracking';
 
 import type { Closure } from './append';
-import type { AppendingBlockList } from './element-builder';
+import type { AppendingBlockList, ResettableBlockImpl } from './element-builder';
+import type { TryState } from './try-state';
 
 import { clear, move as moveBounds } from '../bounds';
-import { NewTreeBuilder } from './element-builder';
+import { NewTreeBuilder, RemoteBlock } from './element-builder';
 
 export class UpdatingVM implements IUpdatingVM {
   public env: Environment;
@@ -38,6 +56,12 @@ export class UpdatingVM implements IUpdatingVM {
   public alwaysRevalidate: boolean;
 
   private frameStack: Stack<UpdatingVMFrame> = new Stack<UpdatingVMFrame>();
+
+  /** Open `{{#try}}` frames. While there are none, opcodes run unguarded. */
+  #boundaryFrames = 0;
+
+  /** Tracking depth when this update started, restored if an error escapes a boundary. */
+  #startTrackingDepth = 0;
 
   constructor(env: Environment, { alwaysRevalidate = false }) {
     this.env = env;
@@ -72,18 +96,100 @@ export class UpdatingVM implements IUpdatingVM {
   private _execute(opcodes: UpdatingOpcode[], handler: ExceptionHandler) {
     let { frameStack } = this;
 
+    this.#startTrackingDepth = getTrackingDepth();
     this.try(opcodes, handler);
 
-    while (!frameStack.isEmpty()) {
-      let opcode = this.frame.nextStatement();
+    try {
+      while (!frameStack.isEmpty()) {
+        let opcode = this.frame.nextStatement();
 
-      if (opcode === undefined) {
-        frameStack.pop();
-        continue;
+        if (opcode === undefined) {
+          this.#popFrame(true);
+          continue;
+        }
+
+        if (this.#boundaryFrames === 0) {
+          opcode.evaluate(this);
+          continue;
+        }
+
+        let trackingDepth = getTrackingDepth();
+
+        try {
+          opcode.evaluate(this);
+        } catch (error) {
+          // Keep what the failed opcode read; the boundary that recovers
+          // collects it from the enclosing frames.
+          consumeTag(unwindTrackingTo(trackingDepth));
+          this.#recover(error);
+        }
+      }
+    } finally {
+      // An error nobody caught abandons the remaining frames.
+      while (!frameStack.isEmpty()) {
+        let { boundary } = this.frame;
+        this.frameStack.pop();
+
+        if (boundary) {
+          this.#boundaryFrames--;
+          endErrorBoundary();
+          boundary.exit();
+          boundary.didAbandonChildren();
+        }
+      }
+    }
+  }
+
+  /**
+   * Hands a JavaScript error to the innermost `{{#try}}` rendering its body.
+   * A boundary showing its fallback does not catch, and one whose fallback
+   * fails while recovering passes the new error outward.
+   */
+  #recover(error: unknown) {
+    let { frameStack } = this;
+
+    while (!frameStack.isEmpty()) {
+      let boundary = this.frame.boundary;
+
+      if (boundary?.isProtecting) {
+        try {
+          boundary.handleCaughtError(error);
+          this.#popFrame(false);
+          return;
+        } catch (fallbackError) {
+          error = fallbackError;
+        }
       }
 
-      opcode.evaluate(this);
+      this.#popFrame(false);
     }
+
+    // Nothing caught it. Close the frames the passed boundaries and their
+    // children left open, as recovery would have. In DEBUG, `execute` resets
+    // tracking itself and needs the open frames to label its log.
+    if (!DEBUG) {
+      unwindTrackingTo(this.#startTrackingDepth);
+    }
+
+    throw error;
+  }
+
+  #popFrame(completed: boolean) {
+    let frame = this.frame;
+
+    if (frame.boundary) {
+      this.#boundaryFrames--;
+      endErrorBoundary();
+      frame.boundary.exit();
+
+      if (completed) {
+        frame.boundary.didCompleteChildren();
+      } else {
+        frame.boundary.didAbandonChildren();
+      }
+    }
+
+    this.frameStack.pop();
   }
 
   private get frame() {
@@ -95,12 +201,20 @@ export class UpdatingVM implements IUpdatingVM {
   }
 
   try(ops: UpdatingOpcode[], handler: Nullable<ExceptionHandler>) {
-    this.frameStack.push(new UpdatingVMFrame(ops, handler));
+    this.frameStack.push(new UpdatingVMFrame(ops, handler, null));
+  }
+
+  /** Pushes the frame for a `{{#try}}`'s children. */
+  tryBoundary(boundary: TryBlockOpcode) {
+    this.#boundaryFrames++;
+    beginErrorBoundary();
+    boundary.enter();
+    this.frameStack.push(new UpdatingVMFrame(boundary.children, boundary, boundary));
   }
 
   throw() {
     this.frame.handleException();
-    this.frameStack.pop();
+    this.#popFrame(false);
   }
 }
 
@@ -174,6 +288,274 @@ export class TryOpcode extends BlockOpcode implements ExceptionHandler {
     });
 
     associateDestroyableChild(this, result.drop);
+  }
+}
+
+/**
+ * The boundaries currently rendering, innermost last. Each one, not just the
+ * innermost, must be able to remove the remote content rendered under it.
+ * `null` is a root render's barrier: an independent root rendered from inside
+ * an attempt owns its remote content, so no enclosing boundary may remove it.
+ */
+const ACTIVE_BOUNDARIES: Nullable<TryBlockOpcode>[] = [];
+
+/** Registers a `{{#in-element}}` block with every boundary rendering it. */
+export function trackRemoteBlock(block: Bounds): void {
+  if (!(block instanceof RemoteBlock)) {
+    return;
+  }
+
+  for (let i = ACTIVE_BOUNDARIES.length - 1; i >= 0; i--) {
+    let boundary = ACTIVE_BOUNDARIES[i];
+
+    if (!boundary) {
+      return;
+    }
+
+    boundary.trackRemoteBlock(block);
+  }
+}
+
+export function beginRootBoundaryBarrier(): void {
+  ACTIVE_BOUNDARIES.push(null);
+}
+
+export function endRootBoundaryBarrier(): void {
+  ACTIVE_BOUNDARIES.splice(ACTIVE_BOUNDARIES.lastIndexOf(null));
+}
+
+/**
+ * The updating side of a `{{#try}}`. Every attempt, whether the body or the
+ * fallback, renders in a sub-VM from the same closure, so a throw unwinds only
+ * the attempt. A failed attempt is removed by DOM range between two nodes that
+ * lie outside the boundary (`#left` and `#right`), because the attempt's own
+ * bounds may never have been initialized.
+ */
+export class TryBlockOpcode extends TryOpcode {
+  override type = 'try-block';
+
+  declare protected bounds: ResettableBlockImpl;
+
+  /** The node before the boundary's content, or `null` at the parent's start. */
+  #left: Nullable<SimpleNode> = null;
+
+  /** The node after the boundary's content, or `null` at the parent's end. */
+  #right: Nullable<SimpleNode> = null;
+
+  #trackingDepth = 0;
+  #renderTreeDepth = 0;
+
+  /** Whether the rendered content is the body, whose errors this boundary catches. */
+  #protecting = false;
+
+  /** Lifecycle work queued by the children while they update. */
+  #childrenAttempt: Nullable<RenderAttempt> = null;
+
+  /**
+   * `{{#in-element}}` blocks rendered under this boundary. Their destructors
+   * run later, after a fallback may already render into the same destination,
+   * so the boundary removes their content itself when it discards them.
+   */
+  #remoteBlocks = new Set<RemoteBlock>();
+
+  constructor(
+    state: Closure,
+    context: EvaluationContext,
+    bounds: ResettableBlockImpl,
+    private tryState: TryState
+  ) {
+    super(state, context, bounds, []);
+  }
+
+  get isProtecting(): boolean {
+    return this.#protecting;
+  }
+
+  /** The first render, inserting before `nextSibling` in the parent. */
+  renderInitial(nextSibling: Nullable<SimpleNode>): void {
+    this.#right = nextSibling;
+    this.#left = nextSibling ? nextSibling.previousSibling : this.bounds.parentElement().lastChild;
+    this.#saveDepths();
+    this.#render();
+    this.tryState.consumeTags();
+  }
+
+  override evaluate(vm: UpdatingVM): void {
+    // Taken before the children run: they may add content at either edge.
+    this.#left = this.bounds.firstNode().previousSibling;
+    this.#right = this.bounds.lastNode().nextSibling;
+    this.#saveDepths();
+    this.tryState.consumeTags();
+
+    if (this.tryState.shouldRetry()) {
+      this.#rerender();
+      return;
+    }
+
+    this.#protecting = !this.tryState.hasError;
+
+    // The children's frame: if one of them throws, `handleCaughtError` turns
+    // what they read into the retry tag.
+    beginTrackFrame();
+    this.#childrenAttempt = this.context.env.beginAttempt();
+    vm.tryBoundary(this);
+  }
+
+  didCompleteChildren(): void {
+    this.context.env.commitAttempt(this.#childrenAttempt);
+    consumeTag(endTrackFrame());
+  }
+
+  /** The children's frame was unwound before they finished. */
+  didAbandonChildren(): void {
+    this.context.env.abortAttempt(this.#childrenAttempt);
+  }
+
+  /** `hasError` flipped, from `retry()`: render the other branch. */
+  override handleException(): void {
+    this.didAbandonChildren();
+    unwindTrackingTo(this.#trackingDepth);
+    this.#rerender();
+  }
+
+  /** A child threw while the body was updating. */
+  handleCaughtError(error: unknown): void {
+    this.didAbandonChildren();
+    let failedTag = unwindTrackingTo(this.#trackingDepth);
+    this.#abort();
+    this.#fail(error, failedTag);
+    this.tryState.consumeTags();
+  }
+
+  trackRemoteBlock(block: RemoteBlock): void {
+    this.#remoteBlocks.add(block);
+    registerDestructor(block, () => this.#remoteBlocks.delete(block));
+  }
+
+  /** Marks this boundary as rendering, for `trackRemoteBlock`. */
+  enter(): void {
+    ACTIVE_BOUNDARIES.push(this);
+  }
+
+  exit(): void {
+    ACTIVE_BOUNDARIES.splice(ACTIVE_BOUNDARIES.lastIndexOf(this), 1);
+  }
+
+  #clearRemoteBlocks(): void {
+    for (let block of this.#remoteBlocks) {
+      block.clearForAbort();
+    }
+
+    this.#remoteBlocks.clear();
+  }
+
+  #saveDepths(): void {
+    this.#trackingDepth = getTrackingDepth();
+    this.#renderTreeDepth = this.context.env.debugRenderTree?.getDepth() ?? 0;
+  }
+
+  #rerender(): void {
+    this.#clearRemoteBlocks();
+    destroyChildren(this);
+    this.#clear();
+    this.bounds.forget();
+    this.#render();
+    this.tryState.consumeTags();
+  }
+
+  /** Renders whichever branch `hasError` selects, falling back if the body throws. */
+  #render(): void {
+    let depth = getTrackingDepth();
+
+    try {
+      this.#attempt();
+    } catch (error) {
+      let failedTag = unwindTrackingTo(depth);
+      this.#abort();
+
+      if (!this.#protecting) {
+        throw error;
+      }
+
+      this.#fail(error, failedTag);
+    }
+  }
+
+  #fail(error: unknown, failedTag: Tag): void {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.error('An error was caught by {{#try}}:', error);
+    }
+
+    this.tryState.setError(error, failedTag);
+
+    let depth = getTrackingDepth();
+
+    try {
+      this.#attempt();
+    } catch (fallbackError) {
+      unwindTrackingTo(depth);
+      this.#abort();
+      throw fallbackError;
+    }
+  }
+
+  #attempt(): void {
+    let { bounds, context } = this;
+
+    this.#protecting = !this.tryState.hasError;
+
+    let attempt = context.env.beginAttempt();
+    let completed = false;
+
+    beginErrorBoundary();
+    beginTrackFrame();
+    this.enter();
+
+    try {
+      let tree = NewTreeBuilder.beginBlock(context.env, bounds, this.#right);
+      let vm = this.state.evaluate(tree);
+      let children = (this.children = []);
+
+      let result = vm.executeAttempt((vm) => {
+        vm.updateWith(this);
+        vm.pushUpdating(children);
+      });
+
+      associateDestroyableChild(this, result.drop);
+      consumeTag(endTrackFrame());
+      completed = true;
+    } finally {
+      this.exit();
+      endErrorBoundary();
+
+      if (completed) {
+        context.env.commitAttempt(attempt);
+      } else {
+        context.env.abortAttempt(attempt);
+      }
+    }
+  }
+
+  /** Removes a failed attempt: its destroyables, its DOM and its debug nodes. */
+  #abort(): void {
+    this.#clearRemoteBlocks();
+    destroyChildren(this);
+    this.#clear();
+    this.context.env.debugRenderTree?.rollbackTo(this.#renderTreeDepth);
+    this.bounds.forget();
+  }
+
+  #clear(): void {
+    let parent = this.bounds.parentElement();
+    let right = this.#right;
+    let node = this.#left ? this.#left.nextSibling : parent.firstChild;
+
+    while (node !== null && node !== right) {
+      let next = node.nextSibling;
+      parent.removeChild(node);
+      node = next;
+    }
   }
 }
 
@@ -431,7 +813,8 @@ class UpdatingVMFrame {
 
   constructor(
     private ops: UpdatingOpcode[],
-    private exceptionHandler: Nullable<ExceptionHandler>
+    private exceptionHandler: Nullable<ExceptionHandler>,
+    readonly boundary: Nullable<TryBlockOpcode>
   ) {}
 
   goto(index: number) {
