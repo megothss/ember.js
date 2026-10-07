@@ -87,8 +87,10 @@ import type { UpdatingVM } from '../../vm';
 import type { VM } from '../../vm/append';
 import type { BlockArgumentsImpl } from '../../vm/arguments';
 import {
+  beginErrorBoundary,
   beginTrackFrame,
   consumeTag,
+  endErrorBoundary,
   endTrackFrame,
   getTrackingDepth,
   unwindTrackingTo,
@@ -946,6 +948,14 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
   let trackingDepth = getTrackingDepth();
   beginTrackFrame();
 
+  let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, [], errorState);
+
+  // Scope the attempt's lifecycle work and remote content to this boundary,
+  // so a failed attempt can drop them.
+  let attempt = vm.env.beginAttempt();
+  beginErrorBoundary();
+  errorBoundaryOp.enter();
+
   try {
     // Use beginBlock (not resume) since this is a fresh block with no prior content.
     // Pass parentNextSibling so content is inserted at the correct cursor position.
@@ -953,7 +963,7 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     let subVM = closure.evaluate(subTree);
 
     let children: UpdatingOpcode[] = [];
-    let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
+    errorBoundaryOp.children = children;
 
     // Use executeErrorBoundary to avoid resetting the parent VM's tracking
     // state and to clean up remote blocks on error.
@@ -962,6 +972,10 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
       subVM.pushUpdating(children);
     });
 
+    errorBoundaryOp.exit();
+    endErrorBoundary();
+    vm.env.commitAttempt(attempt);
+
     // The attempt succeeded: hand what it consumed to the enclosing frame.
     consumeTag(endTrackFrame());
 
@@ -969,6 +983,14 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     vm.associateDestroyable(errorBoundaryOp);
     vm.updateWith(errorBoundaryOp);
   } catch (error) {
+    errorBoundaryOp.exit();
+    endErrorBoundary();
+    vm.env.abortAttempt(attempt);
+
+    // Remote destructors run later, after the fallback may already render
+    // into the same destination: remove that content now.
+    errorBoundaryOp.clearRemoteBlocks();
+
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.error('An error was caught by <ErrorBoundary>:', error);
@@ -1001,12 +1023,34 @@ APPEND_OPCODES.add(VM_INVOKE_COMPONENT_LAYOUT_GUARDED_OP, (vm, { op1: register }
     let retryVM = closure.evaluate(retryTree);
 
     let children: UpdatingOpcode[] = [];
-    let errorBoundaryOp = new ErrorBoundaryOpcode(closure, vm.context, block, children, errorState);
+    errorBoundaryOp.children = children;
 
-    let result = retryVM.executeErrorBoundary((retryVM) => {
-      retryVM.updateWith(errorBoundaryOp);
-      retryVM.pushUpdating(children);
-    });
+    let fallbackAttempt = vm.env.beginAttempt();
+    let fallbackCompleted = false;
+
+    beginErrorBoundary();
+    errorBoundaryOp.enter();
+
+    let result;
+
+    try {
+      result = retryVM.executeErrorBoundary((retryVM) => {
+        retryVM.updateWith(errorBoundaryOp);
+        retryVM.pushUpdating(children);
+      });
+      fallbackCompleted = true;
+    } finally {
+      errorBoundaryOp.exit();
+      endErrorBoundary();
+
+      if (fallbackCompleted) {
+        vm.env.commitAttempt(fallbackAttempt);
+      } else {
+        // The fallback threw too: its work and remote content go with it.
+        vm.env.abortAttempt(fallbackAttempt);
+        errorBoundaryOp.clearRemoteBlocks();
+      }
+    }
 
     associateDestroyableChild(errorBoundaryOp, result.drop);
     vm.associateDestroyable(errorBoundaryOp);

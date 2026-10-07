@@ -10,6 +10,8 @@ import type {
   DynamicScope,
   Environment,
   EvaluationContext,
+  ModifierInstance,
+  Nullable,
   Owner,
   Program,
   ProgramConstants,
@@ -34,7 +36,12 @@ import { UNDEFINED_REFERENCE } from '@glimmer/reference/lib/reference';
 import { reverse } from '@glimmer/util/lib/array-utils';
 import { StackImpl as Stack } from '@glimmer/util/lib/collections';
 import { LOCAL_LOGGER } from '@glimmer/util';
-import { beginTrackFrame, endTrackFrame, resetTracking } from '@glimmer/validator/lib/tracking';
+import {
+  beginTrackFrame,
+  endTrackFrame,
+  isInErrorBoundary,
+  resetTracking,
+} from '@glimmer/validator/lib/tracking';
 import { $pc, isLowLevelRegister } from '@glimmer/vm/lib/registers';
 
 import type { ScopeOptions } from '../scope';
@@ -753,6 +760,13 @@ export class VM {
     try {
       return this._execute(initialize);
     } catch (e) {
+      if (isInErrorBoundary()) {
+        // A boundary recovers from this error and removes the DOM by range,
+        // so the destroyables this render created are unreachable otherwise.
+        destroy(this.#stacks.drop);
+      }
+
+      this.#releaseUnownedModifiers();
       let elements = this.tree();
       while (elements.hasBlocks) {
         elements.popBlock();
@@ -776,8 +790,51 @@ export class VM {
       // Destroy the sub-VM's destroyable root to clean up any associated
       // resources (e.g. RemoteBlocks from {{#in-element}}).
       destroy(this.#stacks.drop);
+      this.#releaseUnownedModifiers();
       throw e;
     }
+  }
+
+  /**
+   * Modifiers created by a boundary attempt that are not yet owned by a
+   * destroyable. One is created while its element's attributes run and is only
+   * associated when the element closes; an attempt that throws in between must
+   * destroy it.
+   */
+  #unownedModifiers: Nullable<Set<ModifierInstance>> = null;
+
+  trackUnownedModifier(modifier: ModifierInstance): void {
+    if (isInErrorBoundary()) {
+      (this.#unownedModifiers ??= new Set()).add(modifier);
+    }
+  }
+
+  ownModifier(modifier: ModifierInstance): void {
+    this.#unownedModifiers?.delete(modifier);
+  }
+
+  #releaseUnownedModifiers(): void {
+    let modifiers = this.#unownedModifiers;
+    this.#unownedModifiers = null;
+
+    modifiers?.forEach(({ manager, state }) => {
+      let destroyable = manager.getDestroyable(state);
+
+      if (destroyable !== null) {
+        destroy(destroyable);
+      }
+
+      // The debug render tree entry, as `VM_CLOSE_ELEMENT_OP` would have
+      // associated it.
+      if (
+        this.env.debugRenderTree !== undefined &&
+        destroyable !== state &&
+        state !== null &&
+        (typeof state === 'object' || typeof state === 'function')
+      ) {
+        destroy(state);
+      }
+    });
   }
 
   execute(initialize?: (vm: this) => void): RenderResult {

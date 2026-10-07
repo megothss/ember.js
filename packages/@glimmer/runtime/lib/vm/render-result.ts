@@ -48,7 +48,7 @@ export default class RenderResultImpl implements RenderResult {
     unreachable(`this should never happen`);
   }
 
-  handleCaughtError() {
+  handleCaughtError(): boolean {
     unreachable(`this should never happen`);
   }
 }

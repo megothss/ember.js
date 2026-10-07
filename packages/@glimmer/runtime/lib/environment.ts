@@ -8,6 +8,7 @@ import type {
   GlimmerTreeConstruction,
   ModifierInstance,
   Nullable,
+  RenderAttempt,
   RuntimeArtifacts,
   RuntimeOptions,
   Transaction,
@@ -25,26 +26,89 @@ import { isArgumentError } from './vm/arguments';
 
 export const TRANSACTION: TransactionSymbol = Symbol('TRANSACTION') as TransactionSymbol;
 
+/** One `{{#try}}` attempt's queued work, as `[queue, item]` pairs. */
+class RenderAttemptImpl implements RenderAttempt {
+  readonly entries: [unknown[], unknown][] = [];
+}
+
 class TransactionImpl implements Transaction {
   public scheduledInstallModifiers: ModifierInstance[] = [];
   public scheduledUpdateModifiers: ModifierInstance[] = [];
   public createdComponents: ComponentInstanceWithCreate[] = [];
   public updatedComponents: ComponentInstanceWithCreate[] = [];
 
+  /**
+   * Open attempts, innermost last. `null` is a root render's barrier: work an
+   * independent root queues belongs to no enclosing attempt.
+   */
+  #attempts: Nullable<RenderAttemptImpl>[] = [];
+
   didCreate(component: ComponentInstanceWithCreate) {
-    this.createdComponents.push(component);
+    this.#queue(this.createdComponents, component);
   }
 
   didUpdate(component: ComponentInstanceWithCreate) {
-    this.updatedComponents.push(component);
+    this.#queue(this.updatedComponents, component);
   }
 
   scheduleInstallModifier(modifier: ModifierInstance) {
-    this.scheduledInstallModifiers.push(modifier);
+    this.#queue(this.scheduledInstallModifiers, modifier);
   }
 
   scheduleUpdateModifier(modifier: ModifierInstance) {
-    this.scheduledUpdateModifiers.push(modifier);
+    this.#queue(this.scheduledUpdateModifiers, modifier);
+  }
+
+  beginAttempt(): RenderAttemptImpl {
+    let attempt = new RenderAttemptImpl();
+    this.#attempts.push(attempt);
+    return attempt;
+  }
+
+  /** A successful attempt's work becomes its parent attempt's. */
+  commitAttempt(attempt: RenderAttemptImpl) {
+    if (this.#popAttempt(attempt)) {
+      this.#attempts.at(-1)?.entries.push(...attempt.entries);
+    }
+  }
+
+  abortAttempt(attempt: RenderAttemptImpl) {
+    if (this.#popAttempt(attempt)) {
+      for (let [queue, item] of attempt.entries) {
+        let index = queue.lastIndexOf(item);
+
+        if (index !== -1) {
+          queue.splice(index, 1);
+        }
+      }
+    }
+  }
+
+  beginRootRender() {
+    this.#attempts.push(null);
+  }
+
+  endRootRender() {
+    while (this.#attempts.length > 0 && this.#attempts.pop() !== null) {
+      // Attempts left open inside the root render are abandoned with it.
+    }
+  }
+
+  #queue<T>(queue: T[], item: T) {
+    queue.push(item);
+    this.#attempts.at(-1)?.entries.push([queue, item]);
+  }
+
+  /** Pops `attempt` and anything still open above it; false if it is not open. */
+  #popAttempt(attempt: RenderAttemptImpl): boolean {
+    let index = this.#attempts.lastIndexOf(attempt);
+
+    if (index === -1) {
+      return false;
+    }
+
+    this.#attempts.length = index;
+    return true;
   }
 
   commit() {
@@ -196,6 +260,26 @@ export class EnvironmentImpl implements Environment {
     if (this.isInteractive) {
       this.transaction.scheduleUpdateModifier(modifier);
     }
+  }
+
+  beginAttempt(): Nullable<RenderAttempt> {
+    return this[TRANSACTION]?.beginAttempt() ?? null;
+  }
+
+  commitAttempt(attempt: Nullable<RenderAttempt>) {
+    if (attempt) this[TRANSACTION]?.commitAttempt(attempt as RenderAttemptImpl);
+  }
+
+  abortAttempt(attempt: Nullable<RenderAttempt>) {
+    if (attempt) this[TRANSACTION]?.abortAttempt(attempt as RenderAttemptImpl);
+  }
+
+  beginRootRender() {
+    this[TRANSACTION]?.beginRootRender();
+  }
+
+  endRootRender() {
+    this[TRANSACTION]?.endRootRender();
   }
 
   commit() {

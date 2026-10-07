@@ -147,6 +147,24 @@ export function unwindTrackingTo(depth: number): Tag {
   return combine(tags);
 }
 
+/**
+ * How many error boundaries are currently rendering. Work that only matters
+ * when a render can be recovered from is skipped while there are none.
+ */
+let ERROR_BOUNDARY_DEPTH = 0;
+
+export function beginErrorBoundary(): void {
+  ERROR_BOUNDARY_DEPTH++;
+}
+
+export function endErrorBoundary(): void {
+  ERROR_BOUNDARY_DEPTH--;
+}
+
+export function isInErrorBoundary(): boolean {
+  return ERROR_BOUNDARY_DEPTH > 0;
+}
+
 // This function is only for handling errors and resetting to a valid state
 export function resetTracking(): string | void {
   while (OPEN_TRACK_FRAMES.length > 0) {

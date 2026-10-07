@@ -284,7 +284,7 @@ export class NewTreeBuilder implements TreeBuilder {
       }
     }
 
-    let block = new RemoteBlock(element);
+    let block = new RemoteBlock(element, insertBefore ?? null);
 
     return this.pushBlock(block, true);
   }
@@ -293,6 +293,7 @@ export class NewTreeBuilder implements TreeBuilder {
     const block = this.popBlock();
     assert(block instanceof RemoteBlock, '[BUG] expecting a RemoteBlock');
     this.popElement();
+    block.didRender();
     return block;
   }
 
@@ -509,12 +510,30 @@ export class AppendingBlockImpl implements AppendingBlock {
 }
 
 export class RemoteBlock extends AppendingBlockImpl {
-  constructor(parent: SimpleElement) {
+  /**
+   * The nodes just outside this block's content in the destination, kept so a
+   * `{{#try}}` can remove the content by range even when the bounds of a
+   * failed render are only partly initialized. `#right` is `null` at the end.
+   */
+  #left: Nullable<SimpleNode>;
+  #right: Nullable<SimpleNode>;
+
+  /** Set once a `{{#try}}` removed the content, so destruction does not repeat it. */
+  #cleared = false;
+
+  constructor(parent: SimpleElement, insertBefore: Nullable<SimpleNode> = null) {
     super(parent);
+
+    this.#right = insertBefore;
+    this.#left = insertBefore ? insertBefore.previousSibling : parent.lastChild;
 
     setLocalDebugType('block:remote', this);
 
     registerDestructor(this, () => {
+      if (this.#cleared) {
+        return;
+      }
+
       // In general, you only need to clear the root of a hierarchy, and should never
       // need to clear any child nodes. This is an important constraint that gives us
       // a strong guarantee that clearing a subtree is a single DOM operation.
@@ -539,15 +558,70 @@ export class RemoteBlock extends AppendingBlockImpl {
       // and avoid clearing the node if it was. In most cases this shouldn't happen,
       // so this might hide bugs where the code clears nested nodes unnecessarily,
       // so we should eventually try to do the correct fix.
-      try {
-        if (this.parentElement() === this.firstNode().parentNode) {
-          clear(this);
-        }
-      } catch {
-        // Block bounds are not fully initialized (e.g. an error was thrown
-        // during initial render before content was appended). Nothing to clear.
+      if (this.parentElement() === this.firstNode().parentNode) {
+        clear(this);
       }
     });
+  }
+
+  /** After a complete render the bounds are valid, so re-anchor on them. */
+  didRender(): void {
+    this.#left = this.firstNode().previousSibling;
+    this.#right = this.lastNode().nextSibling;
+  }
+
+  /**
+   * Removes this block's content synchronously, by range, for a `{{#try}}`
+   * that is discarding it. Uses the block's own bounds when they are complete,
+   * so later content in a shared destination survives, and the anchors saved
+   * at the last complete render when a failed render left them partial. Does
+   * nothing when the left anchor was itself removed, rather than guess at a
+   * range that might hold unrelated content.
+   */
+  clearForAbort(): void {
+    if (this.#cleared) {
+      return;
+    }
+
+    let parent = this.parentElement();
+    let left = this.#left;
+    let right = this.#right;
+
+    try {
+      let first = this.firstNode();
+      let last = this.lastNode();
+
+      // An enclosing remote block's range already took this content with it.
+      if (last.parentNode !== parent) {
+        this.#cleared = true;
+        return;
+      }
+
+      right = last.nextSibling;
+
+      // A nested `{{#in-element}}` without `insertBefore` empties the
+      // destination, detaching the front of this block's range: clear from
+      // the saved left anchor instead.
+      if (first.parentNode === parent) {
+        left = first.previousSibling;
+      }
+    } catch {
+      // A failed render left the bounds partial: keep the saved anchors.
+    }
+
+    if (left !== null && left.parentNode !== parent) {
+      return;
+    }
+
+    let node = left ? left.nextSibling : parent.firstChild;
+
+    while (node !== null && node !== right) {
+      let next = node.nextSibling;
+      parent.removeChild(node);
+      node = next;
+    }
+
+    this.#cleared = true;
   }
 }
 
