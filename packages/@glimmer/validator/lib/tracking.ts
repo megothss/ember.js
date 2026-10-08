@@ -95,6 +95,54 @@ export function endUntrackFrame(): void {
   CURRENT_TRACKER = OPEN_TRACK_FRAMES.pop() || null;
 }
 
+/**
+ * How many `{{#try}}` boundaries are currently rendering. While one is, a
+ * failed render is recovered from rather than torn down, so tracking state is
+ * unwound with `unwindTrackingTo` instead of being reset.
+ */
+let ERROR_BOUNDARY_DEPTH = 0;
+
+export function beginErrorBoundary(): void {
+  ERROR_BOUNDARY_DEPTH++;
+}
+
+export function endErrorBoundary(): void {
+  ERROR_BOUNDARY_DEPTH--;
+}
+
+export function isInErrorBoundary(): boolean {
+  return ERROR_BOUNDARY_DEPTH > 0;
+}
+
+export function getTrackingDepth(): number {
+  return OPEN_TRACK_FRAMES.length;
+}
+
+/**
+ * Pops tracking frames left open by a render that threw, back to `depth`, and
+ * returns a tag combining everything they consumed. An error boundary uses it
+ * to learn which tracked state the failed render read, so it can retry when
+ * any of it changes.
+ */
+export function unwindTrackingTo(depth: number): Tag {
+  let tags: Tag[] = [];
+
+  while (OPEN_TRACK_FRAMES.length > depth) {
+    // An untrack frame has no tracker and never opened a debug transaction.
+    if (CURRENT_TRACKER !== null) {
+      tags.push(CURRENT_TRACKER.combine());
+
+      if (DEBUG) {
+        unwrap(debug.endTrackingTransaction)();
+      }
+    }
+
+    CURRENT_TRACKER = OPEN_TRACK_FRAMES.pop() ?? null;
+  }
+
+  return combine(tags);
+}
+
 // This function is only for handling errors and resetting to a valid state
 export function resetTracking(): string | void {
   while (OPEN_TRACK_FRAMES.length > 0) {
@@ -234,11 +282,21 @@ export function track(block: () => void, debugLabel?: string | false): Tag {
   beginTrackFrame(debugLabel);
 
   let tag;
+  let threw = true;
 
   try {
     block();
+    threw = false;
   } finally {
     tag = endTrackFrame();
+
+    // Inside an error boundary, a block that throws still depended on what it
+    // read first; hand that to the parent frame so the boundary can retry when
+    // it changes. A flag rather than catch + rethrow keeps "pause on uncaught
+    // exceptions" pointing at the original throw.
+    if (threw && ERROR_BOUNDARY_DEPTH > 0) {
+      consumeTag(tag);
+    }
   }
 
   return tag;

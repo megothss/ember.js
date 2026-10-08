@@ -72,7 +72,7 @@ PrintVisitor.prototype.BlockStatement = PrintVisitor.prototype.DecoratorBlock = 
     if (block.program) {
       this.padding++;
     }
-    out += this.pad('{{^}}');
+    out += this.pad(block.catch ? '{{catch}}' : '{{^}}');
     this.padding++;
     out += this.accept(block.inverse);
     this.padding--;

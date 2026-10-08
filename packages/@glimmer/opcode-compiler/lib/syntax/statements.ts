@@ -56,7 +56,12 @@ import {
   InvokeDynamicComponent,
   InvokeNonStaticComponent,
 } from '../opcode-builder/helpers/components';
-import { Replayable, ReplayableIf, SwitchCases } from '../opcode-builder/helpers/conditional';
+import {
+  Replayable,
+  ReplayableIf,
+  SwitchCases,
+  TryBlock,
+} from '../opcode-builder/helpers/conditional';
 import { expr } from '../opcode-builder/helpers/expr';
 import {
   isGetFreeComponent,
@@ -315,6 +320,18 @@ STATEMENTS.add(SexpOpcodes.If, (op, [, condition, block, inverse]) =>
           InvokeStaticBlock(op, inverse);
         }
       : undefined
+  )
+);
+
+STATEMENTS.add(SexpOpcodes.Try, (op, [, block, catchBlock]) =>
+  TryBlock(
+    op,
+    () => InvokeStaticBlock(op, block),
+    () => {
+      if (catchBlock) {
+        InvokeStaticBlockWithStack(op, catchBlock, 2);
+      }
+    }
   )
 );
 

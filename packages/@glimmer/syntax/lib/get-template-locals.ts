@@ -1,3 +1,4 @@
+import type WalkerPath from './traversal/path';
 import type * as ASTv1 from './v1/api';
 
 import { isKeyword } from './keywords';
@@ -60,6 +61,21 @@ function getPathName(
 
     return tag;
   }
+}
+
+/**
+ * `try` is only a keyword as the path of a block (`{{#try}}`). Everywhere else
+ * it is an ordinary name, so the exemption is per occurrence rather than via
+ * `isKeyword`.
+ */
+function isTryBlockPath(node: ASTv1.PathExpression, path: WalkerPath<ASTv1.PathExpression>) {
+  return (
+    path.parentKey === 'path' &&
+    path.parentNode?.type === 'BlockStatement' &&
+    node.head.type === 'VarHead' &&
+    node.head.name === 'try' &&
+    node.tail.length === 0
+  );
 }
 
 /**
@@ -127,7 +143,11 @@ export function getTemplateLocals(
       },
     },
 
-    PathExpression(node) {
+    PathExpression(node, path) {
+      if (!options.includeKeywords && isTryBlockPath(node, path)) {
+        return;
+      }
+
       addTokens(tokensSet, node, scopedTokens, options);
     },
   });

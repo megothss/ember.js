@@ -4,6 +4,7 @@ import {
   VM_JUMP_EQ_OP,
   VM_JUMP_UNLESS_OP,
   VM_POP_OP,
+  VM_TRY_ENTER_OP,
 } from '@glimmer/constants/lib/syscall-ops';
 import {
   VM_JUMP_OP,
@@ -224,4 +225,38 @@ export function ReplayableIf(
       ifFalse();
     }
   });
+}
+
+/**
+ * Compiles `{{#try}}`. `VM_TRY_ENTER_OP` pushes `[error, retry, hasError]`,
+ * captures those three references together with the code that follows as a
+ * closure, renders the closure in a guarded sub-VM and jumps to `END`. The
+ * main VM never runs the body: every attempt (the first render, a retry, the
+ * fallback) is a sub-VM that starts at the body with the three references on
+ * its stack and stops at the `RETURN`, because a restored VM has `$ra = -1`.
+ *
+ * The sub-VM's caller pushes the block and the updating list that `VM_EXIT_OP`
+ * pops, mirroring how `TryOpcode` replays a `Replayable` body.
+ */
+export function TryBlock(op: PushStatementOp, tryBody: () => void, catchBody: () => void): void {
+  op(HighLevelBuilderOpcodes.StartLabels);
+  op(VM_TRY_ENTER_OP, labelOperand('END'));
+
+  // `hasError` is not constant, so this installs an `Assert` in the boundary's
+  // own updating frame: when it flips, the boundary re-renders the whole body.
+  op(VM_JUMP_UNLESS_OP, labelOperand('TRY'));
+
+  // Stack: `[error, retry]`.
+  catchBody();
+  op(VM_JUMP_OP, labelOperand('FINALLY'));
+
+  op(HighLevelBuilderOpcodes.Label, 'TRY');
+  tryBody();
+
+  op(HighLevelBuilderOpcodes.Label, 'FINALLY');
+  op(VM_EXIT_OP);
+  op(VM_RETURN_OP);
+
+  op(HighLevelBuilderOpcodes.Label, 'END');
+  op(HighLevelBuilderOpcodes.StopLabels);
 }

@@ -517,6 +517,7 @@ class StatementNormalizer {
           symbols: this.block.table,
           program: this.Block(program),
           inverse: inverse ? this.Block(inverse) : null,
+          inverseName: block.catch ? ('catch' as const) : ('else' as const),
         },
         callParts
       ),

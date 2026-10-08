@@ -10,6 +10,8 @@ import type {
   DynamicScope,
   Environment,
   EvaluationContext,
+  ModifierInstance,
+  Nullable,
   Owner,
   Program,
   ProgramConstants,
@@ -25,7 +27,7 @@ import type { Reference } from '@glimmer/reference/lib/reference';
 import type { MachineRegister, Register, SyscallRegister } from '@glimmer/vm/lib/registers';
 import { dev, expect } from '@glimmer/debug-util/lib/platform-utils';
 import { unwrapHandle } from '@glimmer/debug-util/lib/template';
-import { associateDestroyableChild } from '@glimmer/destroyable';
+import { associateDestroyableChild, destroy } from '@glimmer/destroyable';
 import { DESTROYABLE_META_KEY } from '@glimmer/util/lib/destroyable-key';
 import { assertGlobalContextWasSet } from '@glimmer/global-context';
 import { LOCAL_DEBUG, LOCAL_TRACE_LOGGING } from '@glimmer/local-debug-flags';
@@ -34,7 +36,12 @@ import { UNDEFINED_REFERENCE } from '@glimmer/reference/lib/reference';
 import { reverse } from '@glimmer/util/lib/array-utils';
 import { StackImpl as Stack } from '@glimmer/util/lib/collections';
 import { LOCAL_LOGGER } from '@glimmer/util';
-import { beginTrackFrame, endTrackFrame, resetTracking } from '@glimmer/validator/lib/tracking';
+import {
+  beginTrackFrame,
+  endTrackFrame,
+  isInErrorBoundary,
+  resetTracking,
+} from '@glimmer/validator/lib/tracking';
 import { $pc, isLowLevelRegister } from '@glimmer/vm/lib/registers';
 
 import type { ScopeOptions } from '../scope';
@@ -738,8 +745,71 @@ export class VM {
 
   /// EXECUTION
 
+  /**
+   * Runs one `{{#try}}` attempt. If it throws, the attempt's destroyables are
+   * destroyed (nothing else will ever reach them) and its open blocks are left
+   * alone: the boundary removes the attempt's DOM by range.
+   */
+  executeAttempt(initialize?: (vm: this) => void): RenderResult {
+    let completed = false;
+
+    try {
+      let result = this._execute(initialize);
+      completed = true;
+      return result;
+    } finally {
+      if (!completed) {
+        this.#releaseFailedRender();
+      }
+    }
+  }
+
+  /**
+   * Modifiers created by an attempt that are not yet owned by a destroyable.
+   * One is created while its element's attributes run and is only associated
+   * when the element closes; an attempt that throws in between must destroy it.
+   */
+  #unownedModifiers: Nullable<Set<ModifierInstance>> = null;
+
+  trackUnownedModifier(modifier: ModifierInstance): void {
+    if (isInErrorBoundary()) {
+      (this.#unownedModifiers ??= new Set()).add(modifier);
+    }
+  }
+
+  ownModifier(modifier: ModifierInstance): void {
+    this.#unownedModifiers?.delete(modifier);
+  }
+
+  /** Releases what a render that threw created, since nothing else will reach it. */
+  #releaseFailedRender(): void {
+    destroy(this.#stacks.drop);
+
+    let modifiers = this.#unownedModifiers;
+    this.#unownedModifiers = null;
+
+    modifiers?.forEach(({ manager, state }) => {
+      let destroyable = manager.getDestroyable(state);
+
+      if (destroyable !== null) {
+        destroy(destroyable);
+      }
+
+      // The debug render tree entry, as `VM_CLOSE_ELEMENT_OP` would have
+      // associated it.
+      if (
+        this.env.debugRenderTree !== undefined &&
+        destroyable !== state &&
+        state !== null &&
+        (typeof state === 'object' || typeof state === 'function')
+      ) {
+        destroy(state);
+      }
+    });
+  }
+
   execute(initialize?: (vm: this) => void): RenderResult {
-    if (DEBUG) {
+    if (DEBUG || isInErrorBoundary()) {
       let hasErrored = true;
       try {
         let value = this._execute(initialize);
@@ -750,7 +820,12 @@ export class VM {
 
         return value;
       } finally {
-        if (hasErrored) {
+        if (hasErrored && isInErrorBoundary()) {
+          // A `{{#try}}` around this render recovers from the error: it keeps
+          // the tracking state and removes the DOM, so only the destroyables
+          // this render created need releasing here.
+          this.#releaseFailedRender();
+        } else if (hasErrored) {
           // If any existing blocks are open, due to an error or something like
           // that, we need to close them all and clean things up properly.
           let elements = this.tree();

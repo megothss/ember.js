@@ -79,6 +79,13 @@ export interface BlockStatement extends BaseNode {
 
   // Printer extension
   chained?: boolean;
+
+  /**
+   * Present (and `true`) only when the inverse was written as
+   * `{{catch as |...|}}` instead of `{{else}}`. Its params live on
+   * `inverse.params`.
+   */
+  catch?: boolean;
 }
 
 export interface ElementModifierStatement extends BaseNode {
