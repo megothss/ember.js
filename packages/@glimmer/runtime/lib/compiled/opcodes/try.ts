@@ -34,8 +34,14 @@ APPEND_OPCODES.add(VM_TRY_ENTER_OP, (vm, { op1: end }) => {
   // Before rendering, so a fallback that throws still leaves the boundary
   // reachable from whatever destroys the parent.
   vm.associateDestroyable(opcode);
+
+  // A cache group of its own, like a component's: an update skips the whole
+  // boundary while nothing it read changed. Its `hasError` and failed-attempt
+  // tags are consumed into the group, so a retry still reaches it.
+  vm.beginCacheGroup('{{#try}}');
   opcode.renderInitial(tree.nextSibling);
   vm.updateWith(opcode);
+  vm.commitCacheGroup();
 
   vm.lowlevel.goto(end);
 });
