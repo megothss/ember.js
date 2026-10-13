@@ -4,9 +4,9 @@ import { templateOnlyComponent } from '@glimmer/runtime/lib/component/template-o
 import ErrorBoundaryTemplate from '../templates/error-boundary';
 
 /**
- * Experiment: a template-only `<ErrorBoundary>` whose layout is a single
- * `{{#try}}`. Template-only is the cheapest component form, so the remaining
- * gap to the keyword is the floor cost of being a component.
+ * A template-only `<ErrorBoundary>` whose layout is a single `{{#try}}`. Its
+ * `<:try>` and `<:catch>` are named blocks, so unlike the keyword's clauses
+ * they can be written in either order.
  */
 const ErrorBoundary = setComponentTemplate(
   ErrorBoundaryTemplate,

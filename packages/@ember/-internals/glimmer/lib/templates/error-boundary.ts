@@ -1,9 +1,9 @@
 import { precompileTemplate } from '@ember/template-compilation';
 
 /**
- * Experiment: `<ErrorBoundary>` as thin sugar over `{{#try}}`, to measure what
- * being a component costs on top of the keyword. Supports only the
- * `<:try>`/`<:catch>` form.
+ * The whole of `<ErrorBoundary>`: a `{{#try}}` that yields to the `<:try>` and
+ * `<:catch>` blocks. A boundary with no fallback uses `{{#try}}` directly, so
+ * there is no default-block form.
  */
 export default precompileTemplate(
   `{{#try}}{{yield to="try"}}{{catch as |error retry|}}{{yield error retry to="catch"}}{{/try}}`,
