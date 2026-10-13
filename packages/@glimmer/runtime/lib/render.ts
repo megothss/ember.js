@@ -21,6 +21,7 @@ import { debug } from '@glimmer/validator/lib/debug';
 import { inTransaction } from './environment';
 import { DynamicScopeImpl } from './scope';
 import { VM } from './vm/append';
+import { beginRootBoundaryBarrier, endRootBoundaryBarrier } from './vm/update';
 
 class TemplateIteratorImpl implements TemplateIterator {
   constructor(private vm: VM) {}
@@ -41,7 +42,17 @@ class TemplateIteratorImpl implements TemplateIterator {
 export function renderSync(env: Environment, iterator: TemplateIterator): RenderResult {
   let result: RenderResult;
 
-  inTransaction(env, () => (result = iterator.sync()));
+  inTransaction(env, () => {
+    env.beginRootRender();
+    beginRootBoundaryBarrier();
+
+    try {
+      result = iterator.sync();
+    } finally {
+      endRootBoundaryBarrier();
+      env.endRootRender();
+    }
+  });
 
   // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- @fixme
   return result!;

@@ -42,6 +42,18 @@ export interface BlockStatement extends Statement {
   openStrip: StripFlags;
   inverseStrip: StripFlags;
   closeStrip: StripFlags;
+  /** Present only when the inverse was written as `{{catch}}` instead of `{{else}}`. */
+  catch?: CatchClause;
+}
+
+export interface CatchClause {
+  loc: SourceLocation;
+  params: CatchParam[];
+}
+
+export interface CatchParam {
+  name: string;
+  loc: SourceLocation;
 }
 
 export interface DecoratorBlock extends BlockStatement { }

@@ -206,7 +206,10 @@ export abstract class HandlebarsNodeVisitors extends Parser {
     }
 
     const program = this.Program(repairedBlock.program, blockParams);
-    const inverse = repairedBlock.inverse ? this.Program(repairedBlock.inverse, []) : null;
+    const catchParams =
+      block.catch?.params.map(({ name, loc }) => b.var({ name, loc: this.source.spanFor(loc) })) ??
+      [];
+    const inverse = repairedBlock.inverse ? this.Program(repairedBlock.inverse, catchParams) : null;
 
     const node = b.block({
       path,
@@ -218,6 +221,7 @@ export abstract class HandlebarsNodeVisitors extends Parser {
       openStrip: block.openStrip,
       inverseStrip: block.inverseStrip,
       closeStrip: block.closeStrip,
+      isCatch: block.catch !== undefined,
     });
 
     const parentProgram = this.currentElement();
@@ -773,7 +777,11 @@ function repairBlock(
   let endProgram = source.spanFor(block.program.loc).getEnd();
 
   if (block.inverse && !block.inverse.loc) {
-    block.inverse.loc = endProgram.collapsed();
+    // An empty `{{catch}}` body starts after the catch tag, not where the
+    // main program ends.
+    block.inverse.loc = block.catch
+      ? source.spanFor(block.catch.loc).getEnd().collapsed()
+      : endProgram.collapsed();
   }
 
   return block as HBS.BlockStatement;

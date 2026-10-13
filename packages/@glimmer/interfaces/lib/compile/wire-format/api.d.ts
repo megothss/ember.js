@@ -42,6 +42,7 @@ import type {
   TrustingAppendOpcode,
   TrustingComponentAttrOpcode,
   TrustingDynamicAttrOpcode,
+  TryOpcode,
   UndefinedOpcode,
   WithDynamicVarsOpcode,
   YieldOpcode,
@@ -282,6 +283,16 @@ export namespace Statements {
 
   export type Let = [op: LetOpcode, positional: Core.Params, block: SerializedInlineBlock];
 
+  /**
+   * `{{#try}} block {{catch as |error retry|}} catchBlock {{/try}}`. The catch
+   * block is `null` when the template has no `{{catch}}`.
+   */
+  export type Try = [
+    op: TryOpcode,
+    block: SerializedInlineBlock,
+    catchBlock: Nullable<SerializedInlineBlock>,
+  ];
+
   export type WithDynamicVars = [
     op: WithDynamicVarsOpcode,
     args: Core.Hash,
@@ -317,6 +328,7 @@ export namespace Statements {
     | InElement
     | If
     | Each
+    | Try
     | Let
     | WithDynamicVars
     | InvokeComponent;

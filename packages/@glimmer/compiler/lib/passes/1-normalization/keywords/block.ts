@@ -151,6 +151,59 @@ export const BLOCK_KEYWORDS = keywords('Block')
       );
     },
   })
+  .kw('try', {
+    assert(node: ASTv2.InvokeBlock): Result<null> {
+      let { args, blocks } = node;
+
+      if (!args.isEmpty()) {
+        return Err(generateSyntaxError(`{{#try}} does not take arguments`, args.loc));
+      }
+
+      if (blocks.get('default').block.scope.locals.length > 0) {
+        return Err(generateSyntaxError(`{{#try}} does not take block params`, node.loc));
+      }
+
+      let inverse = blocks.get('else');
+
+      if (inverse) {
+        return Err(
+          generateSyntaxError(`{{#try}} does not support {{else}}; use {{catch}}`, node.loc)
+        );
+      }
+
+      let catchBlock = blocks.get('catch');
+      let catchParams = catchBlock ? catchBlock.block.scope.locals.length : 0;
+
+      if (catchBlock && catchParams > 2) {
+        return Err(
+          generateSyntaxError(
+            `{{catch}} accepts at most two block params (error and retry), received ${catchParams}`,
+            node.loc
+          )
+        );
+      }
+
+      return Ok(null);
+    },
+
+    translate({
+      node,
+      state,
+    }: {
+      node: ASTv2.InvokeBlock;
+      state: NormalizationState;
+    }): Result<mir.Try> {
+      let block = node.blocks.get('default');
+      let catchBlock = node.blocks.get('catch');
+
+      let blockResult = VISIT_STMTS.NamedBlock(block, state);
+      let catchResult = catchBlock ? VISIT_STMTS.NamedBlock(catchBlock, state) : Ok(null);
+
+      return Result.all(blockResult, catchResult).mapOk(
+        ([block, catchBlock]) => new mir.Try({ loc: node.loc, block, catchBlock })
+      );
+    },
+  })
   .kw('unless', {
     assert(node: ASTv2.InvokeBlock): Result<{
       condition: ASTv2.ExpressionNode;

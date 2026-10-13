@@ -96,6 +96,7 @@ import {
   VM_SPREAD_BLOCK_OP,
   VM_STATIC_ATTR_OP,
   VM_SYSCALL_SIZE,
+  VM_TRY_ENTER_OP,
   VM_TEXT_OP,
   VM_TO_BOOLEAN_OP,
   VM_VIRTUAL_ROOT_SCOPE_OP,
@@ -529,6 +530,13 @@ if (LOCAL_DEBUG) {
     mnemonic: 'blk_start',
     stackChange: 0,
     ops: ['args:imm/u32'],
+  };
+
+  METADATA[VM_TRY_ENTER_OP] = {
+    name: 'TryEnter',
+    mnemonic: 'try_start',
+    stackChange: 0,
+    ops: ['to:instruction/relative'],
   };
 
   METADATA[VM_EXIT_OP] = {

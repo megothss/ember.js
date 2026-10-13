@@ -209,6 +209,13 @@ export default class WireFormatDebugger {
         case Op.Not:
           return ['not'];
 
+        case Op.Try:
+          return [
+            'try',
+            this.formatBlock(opcode[1]),
+            opcode[2] ? this.formatBlock(opcode[2]) : null,
+          ];
+
         case Op.Each:
           return [
             'each',

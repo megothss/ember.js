@@ -379,7 +379,14 @@ export default class Printer {
     if (block.inverse) {
       if (!block.inverse.chained) {
         this.buffer += block.inverseStrip.open ? '{{~' : '{{';
-        this.buffer += 'else';
+        if (block.catch) {
+          this.buffer += 'catch';
+          if (block.inverse.blockParams.length) {
+            this.BlockParams(block.inverse.blockParams);
+          }
+        } else {
+          this.buffer += 'else';
+        }
         this.buffer += block.inverseStrip.close ? '~}}' : '}}';
       }
 

@@ -48,6 +48,7 @@ openRawBlock
 
 block
   : openBlock program inverseChain? closeBlock -> yy.prepareBlock($1, $2, $3, $4, false, @$)
+  | openBlock program catchClause closeBlock -> yy.prepareBlock($1, $2, $3, $4, false, @$)
   | openInverse program inverseAndProgram? closeBlock -> yy.prepareBlock($1, $2, $3, $4, true, @$)
   ;
 
@@ -176,4 +177,20 @@ path
 pathSegments
   : pathSegments sep ID { $1.push({part: yy.id($3), original: $3, separator: $2}); $$ = $1; }
   | ID -> [{part: yy.id($1), original: $1}]
+  ;
+
+catchClause
+  : CATCH program -> { strip: yy.stripFlags($1, $1), program: $2, catch: { loc: yy.locInfo(@1), params: [] } }
+  | OPEN_CATCH_PARAMS catchParams CLOSE_BLOCK_PARAMS CLOSE program {
+    $$ = {
+      strip: yy.stripFlags($1, $4),
+      program: $5,
+      catch: { loc: yy.locInfo({ first_line: @1.first_line, first_column: @1.first_column, last_line: @4.last_line, last_column: @4.last_column }), params: $2 }
+    };
+  }
+  ;
+
+catchParams
+  : catchParams ID { $1.push({ name: yy.id($2), loc: yy.locInfo(@2) }); $$ = $1; }
+  | ID -> [{ name: yy.id($1), loc: yy.locInfo(@1) }]
   ;

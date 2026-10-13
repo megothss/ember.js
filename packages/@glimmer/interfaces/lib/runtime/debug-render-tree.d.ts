@@ -46,4 +46,8 @@ export interface DebugRenderTree<Bucket extends object = object> {
   commit(): void;
 
   capture(): CapturedRenderNode[];
+
+  getDepth(): number;
+
+  rollbackTo(depth: number): void;
 }

@@ -6,3 +6,4 @@ import './compiled/opcodes/debugger';
 import './compiled/opcodes/dom';
 import './compiled/opcodes/vm';
 import './compiled/opcodes/lists';
+import './compiled/opcodes/try';
